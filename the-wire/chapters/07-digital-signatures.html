@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>7 · Digital signatures — The Wire</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root{
+  --paper:#FBFBF7;
+  --paper-2:#F2F2EA;
+  --ink:#14161A;
+  --ink-soft:#4A4F58;
+  --rule:#DCDDD4;
+  --client:#1B4FD8;
+  --server:#D6006E;
+  --ok:#0B8A5B;
+  --warn:#E8A317;
+  --bad:#C1121F;
+  --display:'Space Grotesk',system-ui,sans-serif;
+  --body:'Source Serif 4',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --nav-w:296px;
+  --measure:78ch;
+}
+
+.course-the-wire  { --client:#1B4FD8; --server:#D6006E; }
+.course-kubernetes{ --client:#0F6E8C; --server:#E2622A; }
+.course-linux     { --client:#5C3D99; --server:#C48A16; }
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--body);font-size:18px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wire-rail{
+  height:3px;width:100%;position:fixed;top:0;left:0;z-index:80;
+  background:linear-gradient(90deg,var(--client) 0%,var(--client) 40%,var(--server) 60%,var(--server) 100%);
+}
+
+/* ============ two-column shell ============ */
+.layout{display:grid;grid-template-columns:var(--nav-w) minmax(0,1fr);align-items:start}
+
+.sidenav{
+  position:sticky;top:0;height:100vh;overflow-y:auto;overscroll-behavior:contain;
+  border-right:1px solid var(--rule);background:var(--paper-2);
+  padding:26px 22px 40px;
+}
+.sidenav::-webkit-scrollbar{width:8px}
+.sidenav::-webkit-scrollbar-thumb{background:#cfd0c6;border-radius:99px}
+
+.content{padding:48px 56px 110px;min-width:0}
+.col{max-width:var(--measure)}
+
+/* ============ side nav internals ============ */
+.brand{display:block;text-decoration:none;color:inherit;margin-bottom:4px}
+.brand .bt{font-family:var(--display);font-weight:700;font-size:1.32rem;letter-spacing:-.02em;line-height:1.1}
+.brand .bs{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-top:5px}
+.brand:hover .bt{color:var(--client)}
+
+.navsearch{
+  display:flex;align-items:center;gap:8px;margin:20px 0 16px;
+  border:1.5px solid var(--rule);background:#fff;padding:8px 10px;border-radius:2px;
+}
+.navsearch:focus-within{border-color:var(--ink)}
+.navsearch input{border:0;outline:0;background:transparent;width:100%;min-width:0;color:var(--ink);font:400 12.5px/1.4 var(--mono)}
+.navsearch .gl{font-size:12px;color:var(--ink-soft)}
+
+.navprog{margin-bottom:22px}
+.navprog .bar{height:5px;background:#e3e4db;border-radius:99px;overflow:hidden}
+.navprog .fill{height:100%;width:0;background:linear-gradient(90deg,var(--client),var(--server));transition:width .35s}
+.navprog .txt{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:7px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.navprog .txt button{font:inherit;background:none;border:0;color:var(--ink-soft);text-decoration:underline;cursor:pointer;padding:0}
+.navprog .txt button:hover{color:var(--bad)}
+
+.navpart{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);
+  margin:22px 0 7px;padding-bottom:5px;border-bottom:1px solid var(--rule);
+}
+.navlist{list-style:none;margin:0;padding:0}
+.navlist li{margin:0}
+.navlink{
+  display:grid;grid-template-columns:22px minmax(0,1fr);gap:9px;align-items:start;
+  padding:6px 8px 6px 6px;margin-left:-6px;border-radius:2px;
+  text-decoration:none;color:var(--ink);
+  font-family:var(--display);font-weight:400;font-size:12.9px;line-height:1.38;
+}
+.navlink:hover{background:#fff}
+.navlink .nn{font-family:var(--mono);font-size:10px;color:var(--ink-soft);padding-top:2px}
+.navlink.here{background:#fff;font-weight:600;box-shadow:inset 2px 0 0 var(--server)}
+.navlink.here .nn{color:var(--server)}
+.navlink.is-done .nn::after{content:" \2713";color:var(--ok)}
+.navlink.is-soon{color:#9a9e96;pointer-events:none}
+.navempty{font-family:var(--mono);font-size:11px;color:var(--ink-soft);padding:14px 0;line-height:1.6}
+
+/* ============ typography ============ */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 16px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(2rem,3.6vw,3.1rem);line-height:1.05;letter-spacing:-.025em;margin:0}
+h2{font-family:var(--display);font-weight:700;font-size:1.6rem;letter-spacing:-.015em;margin:3.2rem 0 .8rem;scroll-margin-top:24px}
+h3{font-family:var(--display);font-weight:500;font-size:1.16rem;margin:2.2rem 0 .5rem}
+p{margin:0 0 1.05em;max-width:var(--measure)}
+a{color:var(--client)}
+ul,ol{max-width:var(--measure);padding-left:1.25em}
+li{margin:.3em 0}
+strong{font-weight:600}
+code{font-family:var(--mono);font-size:.85em;background:var(--paper-2);padding:.12em .38em;border:1px solid var(--rule);border-radius:3px}
+
+header.masthead{padding:0 0 30px;border-bottom:1px solid var(--rule);margin-bottom:40px}
+.lede{font-size:1.16rem;line-height:1.55;color:var(--ink-soft);max-width:68ch;margin:18px 0 0}
+
+/* ============ index page ============ */
+.tocpart{
+  font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft);
+  margin:40px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--rule);max-width:var(--measure);
+}
+.toc{list-style:none;padding:0;margin:0;max-width:var(--measure)}
+.toc li{margin:0}
+.tocitem{
+  display:grid;grid-template-columns:50px minmax(0,1fr) auto;column-gap:16px;align-items:start;
+  padding:14px 12px;border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  transition:background .12s,padding-left .12s;
+}
+.tocitem:hover{background:#fff;padding-left:18px}
+.tocnum{font-family:var(--mono);font-size:12px;color:var(--client);font-weight:700;padding-top:3px}
+.toctitle{display:block;font-family:var(--display);font-weight:600;font-size:1.06rem;line-height:1.3;letter-spacing:-.01em}
+.tocdesc{display:block;font-size:.9rem;color:var(--ink-soft);line-height:1.5;margin-top:5px}
+.tocstate{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;padding-top:5px}
+.tocitem.done{background:#fff}
+.tocitem.done .tocstate{color:var(--ok)}
+.tocitem.done .tocnum::after{content:" \2713";color:var(--ok)}
+.tocitem.soon{opacity:.5}
+
+/* ============ chapter chrome ============ */
+.chapnav{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:0 0 22px;margin-bottom:26px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;max-width:var(--measure)}
+.chapnav a{text-decoration:none;color:var(--ink-soft)}
+.chapnav a:hover{color:var(--client)}
+.chapfoot{display:flex;justify-content:space-between;gap:16px;margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12.5px;max-width:var(--measure)}
+.donebar{margin:52px 0 0;padding:20px;background:#fff;border:1px solid var(--rule);border-left:3px solid var(--ok);max-width:var(--measure)}
+.donebar label{font-family:var(--mono);font-size:12.5px;display:flex;gap:10px;align-items:center;cursor:pointer;line-height:1.4}
+.donebar input{width:18px;height:18px;accent-color:var(--ok);flex:none}
+
+/* ============ content blocks ============ */
+.callout{border-left:3px solid var(--client);background:#fff;padding:16px 20px;margin:1.8em 0;max-width:var(--measure);font-size:.96rem}
+.callout.warn{border-left-color:var(--warn)}
+.callout.bad{border-left-color:var(--bad)}
+.callout.rfc{border-left-color:var(--ink-soft)}
+.callout .tag{font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px}
+.callout p:last-child{margin-bottom:0}
+
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:#fff;border:1px solid var(--rule);border-top:3px solid var(--ink);padding:16px;overflow-x:auto;margin:1.6em 0;max-width:var(--measure)}
+pre code{background:none;border:0;padding:0;font-size:inherit}
+.lab{margin:1.8em 0;max-width:var(--measure)}
+.lab .labhead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;background:var(--ink);color:var(--paper);padding:7px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.lab .labhead button{font:inherit;background:transparent;border:1px solid rgba(255,255,255,.4);color:var(--paper);padding:3px 8px;cursor:pointer;border-radius:2px}
+.lab .labhead button:hover{background:rgba(255,255,255,.15)}
+.lab pre{margin:0;border-top:0;max-width:none}
+
+table{border-collapse:collapse;width:100%;max-width:var(--measure);margin:1.6em 0;font-size:.9rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+td code{font-size:.84em}
+
+/* ============ interactive frame ============ */
+.demo{border:1px solid var(--rule);background:#fff;margin:2.2em 0;max-width:var(--measure)}
+.demo .demohead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);padding:9px 16px;border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.demo .demobody{padding:20px}
+.demo .demonote{padding:12px 16px;border-top:1px solid var(--rule);background:var(--paper-2);font-size:.86rem;color:var(--ink-soft);line-height:1.55}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.ctl label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft)}
+.ctl input[type=text],.ctl input[type=number],.ctl select,textarea{font-family:var(--mono);font-size:13px;padding:7px 9px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);border-radius:2px}
+textarea{width:100%;resize:vertical}
+.chip{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink-soft)}
+.chip:hover{border-color:var(--ink)}
+.chip[aria-pressed=true],.chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.out{font-family:var(--mono);font-size:12.5px;word-break:break-word;background:var(--paper-2);border:1px solid var(--rule);padding:12px;line-height:1.7}
+svg{max-width:100%;height:auto;display:block}
+.hexdump{font-family:var(--mono);font-size:12px;line-height:1.8;word-break:break-all}
+.hexdump .hl{background:#FFF0A8;outline:1px solid var(--warn)}
+
+/* ============ quiz ============ */
+.quiz{border:1px solid var(--rule);background:#fff;padding:22px;margin:2.4em 0;max-width:var(--measure)}
+.quiz h3{margin-top:0}
+.q{margin:0 0 22px;padding-bottom:18px;border-bottom:1px dashed var(--rule)}
+.q:last-of-type{border-bottom:0;padding-bottom:0}
+.q p.qtext{font-weight:600;margin-bottom:10px}
+.opts{display:flex;flex-direction:column;gap:7px}
+.opt{text-align:left;font-family:var(--body);font-size:.95rem;line-height:1.45;padding:9px 13px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink)}
+.opt:hover{border-color:var(--ink)}
+.opt.right{border-color:var(--ok);background:#E8F6F0;box-shadow:inset 3px 0 0 var(--ok)}
+.opt.wrong{border-color:var(--bad);background:#FBEAEA;box-shadow:inset 3px 0 0 var(--bad)}
+.why{font-size:.88rem;color:var(--ink-soft);margin-top:9px;display:none;border-left:2px solid var(--rule);padding-left:12px}
+.why.show{display:block}
+
+/* ============ responsive ============ */
+.navtoggle{
+  display:none;width:100%;text-align:left;margin-top:14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  background:#fff;border:1px solid var(--rule);color:var(--ink-soft);padding:9px 12px;cursor:pointer;border-radius:2px;
+}
+
+@media (max-width:1240px){ :root{--nav-w:258px} .content{padding:44px 40px 100px} }
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidenav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--rule);padding:22px 20px 24px}
+  .navtoggle{display:block}
+  .navbody{display:none;margin-top:16px}
+  .navbody.open{display:block}
+  .content{padding:32px 20px 80px}
+  body{font-size:17px}
+  .tocitem{grid-template-columns:38px minmax(0,1fr);column-gap:10px}
+  .tocstate{display:none}
+  .chapnav,.chapfoot{flex-direction:column;align-items:flex-start;gap:8px}
+}
+
+
+
+/* ============ library landing ============ */
+.libwrap{max-width:1000px;margin:0 auto;padding:74px 40px 110px}
+.libhead{border-bottom:1px solid var(--rule);padding-bottom:34px;margin-bottom:12px}
+.libhead h1{font-size:clamp(2.2rem,4.4vw,3.5rem)}
+.libmeta{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-top:26px;display:flex;gap:22px;flex-wrap:wrap}
+
+.courses{display:grid;gap:0;margin-top:8px}
+.ccard{
+  display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:40px;align-items:start;
+  padding:38px 20px 38px 24px;margin-left:-24px;
+  border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  position:relative;transition:background .14s;
+}
+.ccard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--c1),var(--c2));opacity:.85}
+.ccard:hover{background:#fff}
+.ccard.locked{opacity:.62;cursor:default}
+.cc-sub{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:10px}
+.cc-title{font-family:var(--display);font-weight:700;font-size:1.85rem;letter-spacing:-.022em;line-height:1.08;margin:0 0 4px}
+.cc-hero{font-family:var(--display);font-weight:400;font-size:1.02rem;color:var(--ink-soft);margin:0 0 14px;line-height:1.35}
+.cc-blurb{font-size:.95rem;line-height:1.6;color:var(--ink-soft);margin:0;max-width:56ch}
+.cc-parts{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:16px;line-height:1.9}
+.cc-parts b{color:var(--ink);font-weight:400}
+
+.cc-side{padding-top:26px}
+.ring{display:block;margin:0 0 12px}
+.cc-stat{font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.8}
+.cc-stat strong{color:var(--ink);font-weight:700}
+.cc-go{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;margin-top:14px;display:inline-block}
+.ccard:hover .cc-go{color:var(--server)}
+
+/* ============ course switcher in the side nav ============ */
+.liblink{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;margin-bottom:16px}
+.liblink:hover{color:var(--ink)}
+.cswitchwrap{display:grid;gap:3px;margin:0 0 20px;padding-bottom:18px;border-bottom:1px solid var(--rule)}
+.cswitch{display:block;text-decoration:none;padding:7px 9px;border-radius:2px;border:1px solid transparent}
+.cswitch:hover{background:#fff}
+.cswitch.on{background:#fff;border-color:var(--rule)}
+.cs-t{display:block;font-family:var(--display);font-weight:600;font-size:12.5px;color:var(--ink);line-height:1.2}
+.cs-s{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:3px}
+.cswitch.on .cs-t{color:var(--server)}
+
+/* ============ cross-course references ============ */
+.xrefs{display:block;margin-top:9px;display:flex;flex-direction:column;gap:4px}
+.xref{display:block;font-family:var(--mono);font-size:10.5px;line-height:1.5;padding-left:13px;position:relative}
+.xref::before{content:"\2197";position:absolute;left:0;top:0;color:var(--server);font-size:10px}
+.xref a{text-decoration:none;color:var(--client);border-bottom:1px solid rgba(27,79,216,.28)}
+.xref a:hover{border-bottom-color:var(--client)}
+.xr-dead{color:var(--ink-soft)}
+.xr-why{color:var(--ink-soft);margin-left:7px}
+
+.callout.xref-note{border-left-color:var(--server);background:#fff}
+.callout.xref-note .tag{color:var(--server)}
+
+@media (max-width:820px){
+  .libwrap{padding:44px 20px 80px}
+  .ccard{grid-template-columns:1fr;gap:20px;padding:28px 16px;margin-left:-16px}
+  .cc-side{padding-top:0;display:flex;align-items:center;gap:18px}
+  .ring{margin:0}
+}
+@media print{ .cswitchwrap,.liblink{display:none!important} }
+
+/* ============ print ============ */
+@media print{
+  :root{--paper:#fff;--measure:none}
+  body{font-size:11pt}
+  .wire-rail,.sidenav,.chapnav,.chapfoot,.donebar,.chip,.lab .labhead button,.navtoggle{display:none!important}
+  .layout{display:block}
+  .content{padding:0}
+  .demo,.quiz,pre,.callout,table{break-inside:avoid;border-color:#999}
+  a{color:inherit;text-decoration:none}
+  a[href^="http"]::after{content:" (" attr(href) ")";font-size:8pt;color:#666}
+  h2{break-after:avoid}
+  .why{display:block!important}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body class="course-the-wire" data-chapter="7">
+<div class="wire-rail"></div>
+<div class="layout">
+<aside class="sidenav" id="side"></aside>
+<main class="content">
+<nav class="chapnav"></nav>
+
+<header class="masthead">
+  <p class="eyebrow">Part II &nbsp;·&nbsp; Cryptographic primitives &nbsp;·&nbsp; Chapter 07</p>
+  <h1>Digital signatures</h1>
+  <p class="lede">The last primitive, and the one that closes the gap Chapter 6 left open. A signature lets one party prove authorship to <em>everybody</em>, not just to a partner holding the same key. Every certificate in Part III is a signature, and the entire trust hierarchy of the internet is signatures all the way down.</p>
+</header>
+
+<div class="col">
+
+<h2>7.1 Signing is not encryption run backwards</h2>
+
+<p>A persistent piece of folklore says signing is "encrypting with the private key". For RSA this is a superficially plausible description of one internal step, and it is wrong as a mental model. It does not describe ECDSA or Ed25519 at all — neither of which can encrypt anything — and it leads people to build schemes that reuse one key pair for both jobs, which is a genuine vulnerability.</p>
+
+<p>The correct framing: a signature scheme is three algorithms.</p>
+
+<pre><code>KeyGen()                  -> (sk, pk)
+Sign(sk, message)         -> signature
+Verify(pk, message, sig)  -> true | false
+
+Security goal: existential unforgeability under chosen-message attack.
+  Even an adversary who can obtain signatures on any messages they like
+  cannot produce a valid signature on any *new* message.</code></pre>
+
+<div class="callout warn">
+  <span class="tag">Never reuse one key pair for both encryption and signing</span>
+  <p>The two operations have different security requirements and different padding schemes, and interactions between them can be exploited — an attacker who can get you to "decrypt" a chosen ciphertext may be able to extract a signature on a message of their choosing. X.509 encodes this in the <code>keyUsage</code> extension for exactly this reason (Ch. 9): a certificate says <code>digitalSignature</code> or <code>keyEncipherment</code>, and a correct implementation enforces it.</p>
+</div>
+
+<h2>7.2 Sign the hash, not the message</h2>
+
+<p>Every real scheme hashes first, then signs the digest. Three reasons, all of them necessary:</p>
+<ul>
+<li><strong>Size.</strong> RSA can only operate on values smaller than the modulus. A 256-bit digest fits; a 4 MB document does not.</li>
+<li><strong>Speed.</strong> One asymmetric operation regardless of message length.</li>
+<li><strong>Security.</strong> The hash's structure destroys the algebraic relationships that make raw RSA malleable.</li>
+</ul>
+
+<p>This is also where a hash break becomes a signature break. If an attacker finds a collision <code>H(m₁) = H(m₂)</code>, a signature on <code>m₁</code> is <em>equally valid</em> on <code>m₂</code>, because the signer only ever touched the digest. This is not theoretical: it is exactly how the 2008 rogue CA certificate and the 2012 Flame malware forged trusted signatures using MD5 collisions. <strong>A signature is only as strong as its hash.</strong></p>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · sign and verify</span><span id="sigstat">—</span></div>
+  <div class="demobody">
+    <div class="ctl" style="display:block">
+      <label for="sm">Message being signed</label>
+      <input id="sm" type="text" value="pay 500 to account 9931" style="width:100%;margin-top:6px">
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <label>Then, in transit</label>
+      <button class="chip on" data-tam="none">Deliver untouched</button>
+      <button class="chip" data-tam="msg">Alter the message</button>
+      <button class="chip" data-tam="sig">Alter the signature</button>
+      <button class="chip" data-tam="key">Verify with the wrong public key</button>
+    </div>
+
+    <svg viewBox="0 0 720 210" role="img" aria-label="Signing and verification flow">
+      <defs><style>
+        .bx{fill:#fff;stroke:#DCDDD4;stroke-width:1.5}
+        .bl{font:600 11px 'Space Grotesk',sans-serif;text-anchor:middle;fill:#14161A}
+        .bs{font:400 9px 'JetBrains Mono',monospace;text-anchor:middle;fill:#4A4F58}
+        .fl{stroke:#4A4F58;stroke-width:1.5;marker-end:url(#a7)}
+      </style>
+      <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M0 0 L10 5 L0 10 z" fill="#4A4F58"/></marker></defs>
+
+      <text class="bs" x="120" y="18" style="font-size:10px;letter-spacing:.14em">SIGNER (private key)</text>
+      <rect class="bx" x="20" y="30" width="94" height="44" rx="3"/>
+      <text class="bl" x="67" y="50">message</text><text class="bs" x="67" y="64">any length</text>
+      <rect class="bx" x="146" y="30" width="94" height="44" rx="3"/>
+      <text class="bl" x="193" y="50">SHA-256</text><text class="bs" x="193" y="64">32 bytes</text>
+      <rect class="bx" x="272" y="30" width="104" height="44" rx="3" style="stroke:#1B4FD8"/>
+      <text class="bl" x="324" y="50" fill="#1B4FD8">Sign(sk, h)</text><text class="bs" x="324" y="64">private key</text>
+      <line class="fl" x1="116" y1="52" x2="142" y2="52"/>
+      <line class="fl" x1="242" y1="52" x2="268" y2="52"/>
+
+      <line class="fl" x1="324" y1="78" x2="324" y2="106"/>
+      <rect class="bx" x="240" y="110" width="240" height="34" rx="3" id="wirebox"/>
+      <text class="bl" x="360" y="131" id="wiretxt">message ‖ signature crosses the wire</text>
+
+      <text class="bs" x="600" y="18" style="font-size:10px;letter-spacing:.14em">VERIFIER (public key)</text>
+      <rect class="bx" x="500" y="30" width="200" height="44" rx="3" style="stroke:#D6006E"/>
+      <text class="bl" x="600" y="50" fill="#D6006E">Verify(pk, message, sig)</text>
+      <text class="bs" x="600" y="64">anyone can do this</text>
+      <path class="fl" d="M480 127 L600 127 L600 80"/>
+
+      <rect class="bx" x="500" y="160" width="200" height="38" rx="3" id="resbox"/>
+      <text class="bl" x="600" y="184" id="restxt" style="font-size:13px">—</text>
+      <line class="fl" x1="600" y1="76" x2="600" y2="156"/>
+    </svg>
+
+    <div class="out" id="sigout" style="margin-top:14px"></div>
+  </div>
+  <div class="demonote">Verification uses only public information, so any third party — a browser, an auditor, a log server — can check it independently and years later. That is the property MACs do not have, and it is what makes a certificate chain possible.</div>
+</div>
+
+<h2>7.3 The three schemes you will meet</h2>
+
+<table>
+<thead><tr><th></th><th>RSA-PSS</th><th>ECDSA</th><th>Ed25519</th></tr></thead>
+<tbody>
+<tr><td>Public key</td><td>256–512 B</td><td>32–48 B</td><td>32 B</td></tr>
+<tr><td>Signature</td><td>256–512 B</td><td>64–96 B</td><td>64 B</td></tr>
+<tr><td>Signing speed</td><td>Slow</td><td>Fast</td><td>Fastest</td></tr>
+<tr><td>Verify speed</td><td><strong>Very fast</strong></td><td>Moderate</td><td>Fast</td></tr>
+<tr><td>Needs a per-signature nonce</td><td>No</td><td><strong>Yes — and it is fatal to get wrong</strong></td><td>No, deterministic by design</td></tr>
+<tr><td>Deterministic</td><td>No (PSS is randomised)</td><td>No, unless RFC 6979</td><td>Yes</td></tr>
+<tr><td>TLS 1.3 support</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+</tbody>
+</table>
+
+<p>Note the asymmetry in the speed rows. RSA verifies very fast because the public exponent is 65537 — a 17-bit number with only two set bits, so verification is a handful of squarings. This is why RSA persists in certificates: a certificate is signed once and verified billions of times, and RSA optimises the operation that actually happens at scale.</p>
+
+<h3>PKCS#1 v1.5 versus PSS</h3>
+<p>The old v1.5 padding is deterministic and has no security proof; PSS is randomised and provably secure under standard assumptions. TLS 1.3 requires PSS for handshake signatures. Certificates are still frequently signed with v1.5 for compatibility with older validators, and there is no known practical break — but PSS is the correct choice for anything new.</p>
+
+<div class="callout bad">
+  <span class="tag">ECDSA nonce reuse destroys the private key</span>
+  <p>ECDSA requires a random secret <em>k</em> per signature. Reuse <em>k</em> across two signatures and the private key falls out with school algebra:</p>
+  <pre style="margin:10px 0 6px"><code>s₁ = k⁻¹(z₁ + r·d)      s₂ = k⁻¹(z₂ + r·d)     same k ⇒ same r
+
+k = (z₁ − z₂) / (s₁ − s₂)        then       d = (s₁·k − z₁) / r</code></pre>
+  <p>Sony's PlayStation 3 used a <em>constant</em> k for firmware signing; the key was extracted and published in 2010, permanently breaking the platform's code-signing. Multiple Bitcoin wallets have been drained by the same bug from weak Android RNGs. RFC 6979 defines deterministic ECDSA, deriving k from the private key and message hash via HMAC, eliminating the RNG dependency. Ed25519 does this by construction, which is the single strongest argument for preferring it.</p>
+</div>
+
+<h2>7.4 What a signature actually proves</h2>
+
+<p>Be precise here, because certificate validation depends on it. A valid signature proves:</p>
+<ul>
+<li>The signer held the private key corresponding to this public key <strong>at some point</strong>.</li>
+<li>The message has not changed by a single bit since signing.</li>
+</ul>
+
+<p>It does <strong>not</strong> prove:</p>
+<ul>
+<li><strong>Who</strong> the signer is. A public key is a number. Binding it to a name is what a certificate does — Chapter 8.</li>
+<li><strong>When</strong> it was signed. There is no timestamp inside a bare signature. That is what timestamping authorities and OCSP's <code>thisUpdate</code> are for.</li>
+<li><strong>Whether the key is still valid.</strong> It may have been revoked, expired, or stolen — Chapter 11.</li>
+<li><strong>Intent.</strong> The key may have been used by malware on the signer's machine.</li>
+</ul>
+
+<p>Every one of those gaps is filled by an entire mechanism in Part III. Signatures are the atom; PKI is the molecule.</p>
+
+<h2>7.5 Where signatures appear in TLS</h2>
+<ol>
+<li><strong>Certificate signatures.</strong> Each certificate is signed by its issuer's private key, forming the chain a client walks to a trusted root (Ch. 8).</li>
+<li><strong>CertificateVerify.</strong> The server signs a hash of the entire handshake transcript with the private key matching its certificate. This is the message that proves the server actually holds the key rather than merely presenting someone's certificate — and it is what closes the MITM gap in Diffie–Hellman.</li>
+<li><strong>OCSP responses and SCTs.</strong> Revocation status and Certificate Transparency inclusion proofs are signed so they can be relayed by untrusted parties (Ch. 11).</li>
+</ol>
+
+<p>Point 2 deserves emphasis. Anyone can download a bank's certificate — it is public. Presenting it proves nothing. The signature over the transcript, verifiable against the public key in that certificate, is the entire proof of identity in TLS.</p>
+
+<h2>7.6 Lab</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · sign, verify, and break it</span><button data-copy>Copy</button></div>
+<pre><code># Ed25519 keys are one line and 32 bytes
+openssl genpkey -algorithm ed25519 -out ed.pem
+openssl pkey -in ed.pem -pubout -out ed.pub
+
+echo -n "pay 500 to account 9931" > msg.txt
+openssl pkeyutl -sign -inkey ed.pem -rawin -in msg.txt -out msg.sig
+openssl pkeyutl -verify -pubin -inkey ed.pub -rawin -in msg.txt -sigfile msg.sig
+#   -> Signature Verified Successfully
+
+# Change one byte of the message and verify again
+echo -n "pay 900 to account 9931" > bad.txt
+openssl pkeyutl -verify -pubin -inkey ed.pub -rawin -in bad.txt -sigfile msg.sig
+#   -> Signature Verification Failure
+
+# RSA-PSS, and the size difference
+openssl genrsa -out rsa.pem 2048 2>/dev/null
+openssl dgst -sha256 -sign rsa.pem -sigopt rsa_padding_mode:pss -out r.sig msg.txt
+openssl rsa -in rsa.pem -pubout -out rsa.pub 2>/dev/null
+openssl dgst -sha256 -verify rsa.pub -sigopt rsa_padding_mode:pss -signature r.sig msg.txt
+ls -l msg.sig r.sig        # 64 bytes vs 256 bytes, for comparable security
+
+# Determinism: Ed25519 gives the identical signature twice, ECDSA does not
+openssl pkeyutl -sign -inkey ed.pem -rawin -in msg.txt | sha256sum
+openssl pkeyutl -sign -inkey ed.pem -rawin -in msg.txt | sha256sum   # same
+
+openssl ecparam -name prime256v1 -genkey -noout -out ec.pem
+openssl dgst -sha256 -sign ec.pem msg.txt | sha256sum
+openssl dgst -sha256 -sign ec.pem msg.txt | sha256sum   # different: that is k
+
+# Look at a real certificate signature in the wild
+openssl s_client -connect example.com:443 </dev/null 2>/dev/null | openssl x509 \
+  | openssl x509 -noout -text | grep -A2 -i 'signature algorithm'</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">Why does a collision in the hash function break a signature scheme?</p>
+    <div class="opts">
+      <button class="opt">It lets the attacker recover the private key</button>
+      <button class="opt">The signer only ever signs the digest, so a signature on one colliding message is valid on the other</button>
+      <button class="opt">It makes verification fail unpredictably</button>
+      <button class="opt">It does not — signatures are independent of the hash</button>
+    </div>
+    <p class="why">Signing operates on H(m), never on m. Two messages with the same digest are indistinguishable to the signing operation, so a signature obtained on a benign document transfers intact to a malicious one. This is exactly how the 2008 rogue CA certificate and Flame's forged Microsoft signatures worked, using MD5.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Two ECDSA signatures from the same key reuse the nonce k. What can an attacker do?</p>
+    <div class="opts">
+      <button class="opt">Nothing meaningful</button>
+      <button class="opt">Recover only those two messages</button>
+      <button class="opt">Cause future verifications to fail</button>
+      <button class="opt">Solve for k, then recover the private key outright</button>
+    </div>
+    <p class="why">The two signature equations share an unknown, so k falls out of their difference and the private key follows immediately. It is arithmetic, not cryptanalysis. Sony's PS3 code-signing key was extracted this way in 2010. Use RFC 6979 deterministic ECDSA, or Ed25519, which removes the nonce entirely.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">A valid signature on a message proves which of the following?</p>
+    <div class="opts">
+      <button class="opt">The holder of the corresponding private key signed this exact message</button>
+      <button class="opt">The named organisation on the certificate signed it</button>
+      <button class="opt">It was signed before the certificate expired</button>
+      <button class="opt">The key was not compromised at signing time</button>
+    </div>
+    <p class="why">A signature binds a message to a <em>key</em>, and nothing more. Binding that key to a name requires a certificate; establishing when it was signed requires a timestamping authority; establishing that the key was still trustworthy requires revocation checking. Part III supplies all three.</p>
+  </div>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">In the TLS handshake, what does the server's CertificateVerify message accomplish?</p>
+    <div class="opts">
+      <button class="opt">It proves the certificate chains to a trusted root</button>
+      <button class="opt">It encrypts the session keys for the client</button>
+      <button class="opt">It signs the handshake transcript, proving the server holds the private key for the certificate it presented</button>
+      <button class="opt">It confirms the negotiated cipher suite</button>
+    </div>
+    <p class="why">Certificates are public — presenting one proves nothing. CertificateVerify signs a hash of everything said so far, which only the holder of the matching private key can produce. It simultaneously proves key possession and binds the identity to <em>this specific</em> key exchange, which is what stops the machine-in-the-middle attack from Chapter 6.</p>
+  </div>
+</div>
+
+<h2>7.7 Part II in one page</h2>
+<table>
+<thead><tr><th>Primitive</th><th>Gives you</th><th>Does not give you</th><th>Default choice</th></tr></thead>
+<tbody>
+<tr><td>Hash</td><td>A fingerprint; integrity when combined with a key</td><td>Any secrecy; any authenticity on its own</td><td>SHA-256</td></tr>
+<tr><td>MAC</td><td>Integrity and authenticity between two key holders</td><td>Non-repudiation</td><td>HMAC-SHA-256</td></tr>
+<tr><td>Symmetric cipher</td><td>Confidentiality, fast</td><td>Integrity, unless AEAD</td><td>AES-256-GCM</td></tr>
+<tr><td>Key exchange</td><td>A shared secret over a public channel; forward secrecy</td><td>Any authentication</td><td>X25519 (ephemeral)</td></tr>
+<tr><td>Signature</td><td>Authenticity verifiable by anyone; non-repudiation</td><td>Identity, freshness, current validity</td><td>Ed25519 or ECDSA P-256</td></tr>
+</tbody>
+</table>
+
+<p>Every "does not give you" in that table is a gap, and every gap in the right-hand column is filled by a mechanism in Part III or Part IV. The largest remaining gap is the one signatures cannot close on their own: <em>a public key is a number, and a number has no name</em>. Chapter 8 is about the machinery the internet built to attach names to numbers, and about how much of that machinery rests on institutional trust rather than mathematics.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
+</main>
+</div>
+
+<script>
+/* Compact, dependency-free SHA-256. Works offline and over file:// where
+   crypto.subtle may be unavailable. Not constant-time — teaching use only. */
+window.sha256 = (function () {
+  var K = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+
+  function rr(x,n){ return (x>>>n)|(x<<(32-n)); }
+
+  function bytes(str){
+    var utf8 = unescape(encodeURIComponent(str)), out = [];
+    for (var i=0;i<utf8.length;i++) out.push(utf8.charCodeAt(i));
+    return out;
+  }
+
+  return function (msg) {
+    var m = (typeof msg === 'string') ? bytes(msg) : Array.prototype.slice.call(msg);
+    var H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    var bitLen = m.length * 8;
+    m.push(0x80);
+    while (m.length % 64 !== 56) m.push(0);
+    for (var i=7;i>=0;i--) m.push((i<4) ? (Math.floor(bitLen/Math.pow(2,8*i)) & 0xff) : 0);
+    /* high 32 bits of length assumed zero for teaching inputs */
+
+    var w = new Array(64);
+    for (var off=0; off<m.length; off+=64) {
+      for (var t=0;t<16;t++)
+        w[t] = (m[off+4*t]<<24)|(m[off+4*t+1]<<16)|(m[off+4*t+2]<<8)|(m[off+4*t+3]);
+      for (t=16;t<64;t++){
+        var s0 = rr(w[t-15],7)^rr(w[t-15],18)^(w[t-15]>>>3);
+        var s1 = rr(w[t-2],17)^rr(w[t-2],19)^(w[t-2]>>>10);
+        w[t] = (w[t-16]+s0+w[t-7]+s1)|0;
+      }
+      var a=H[0],b=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
+      for (t=0;t<64;t++){
+        var S1 = rr(e,6)^rr(e,11)^rr(e,25);
+        var ch = (e&f)^((~e)&g);
+        var t1 = (h+S1+ch+K[t]+w[t])|0;
+        var S0 = rr(a,2)^rr(a,13)^rr(a,22);
+        var mj = (a&b)^(a&c)^(b&c);
+        var t2 = (S0+mj)|0;
+        h=g; g=f; f=e; e=(d+t1)|0; d=c; c=b; b=a; a=(t1+t2)|0;
+      }
+      H=[(H[0]+a)|0,(H[1]+b)|0,(H[2]+c)|0,(H[3]+d)|0,(H[4]+e)|0,(H[5]+f)|0,(H[6]+g)|0,(H[7]+h)|0];
+    }
+    return H.map(function(x){ return ('00000000'+(x>>>0).toString(16)).slice(-8); }).join('');
+  };
+})();
+
+</script>
+<script>
+(function(){
+  var tam='none';
+  var msgEl=document.getElementById('sm');
+
+  function render(){
+    var m=msgEl.value;
+    var h=sha256(m);
+    var sk='SK-7f3a', pk='PK-7f3a';
+    var sig=sha256(sk+':'+h).slice(0,64);   // stand-in: a keyed, message-bound value
+
+    var delivered=m, delivSig=sig, verifyKey=pk, note='';
+    if(tam==='msg'){ delivered=m.replace(/\d+/, function(d){ return (+d)+400; }); }
+    if(tam==='sig'){ delivSig = sig.slice(0,32)+'a'+sig.slice(33); }
+    if(tam==='key'){ verifyKey='PK-c19e'; }
+
+    var expected = sha256((verifyKey==='PK-7f3a'?'SK-7f3a':'SK-c19e')+':'+sha256(delivered)).slice(0,64);
+    var ok = (expected===delivSig);
+
+    document.getElementById('wiretxt').textContent =
+      tam==='none' ? 'message \u2016 signature crosses the wire'
+      : tam==='msg' ? 'message ALTERED in transit'
+      : tam==='sig' ? 'signature ALTERED in transit'
+      : 'message \u2016 signature crosses the wire';
+    document.getElementById('wirebox').setAttribute('stroke', (tam==='msg'||tam==='sig')?'#C1121F':'#DCDDD4');
+
+    var rb=document.getElementById('resbox'), rt=document.getElementById('restxt');
+    rb.setAttribute('fill', ok?'#E8F6F0':'#FBEAEA');
+    rb.setAttribute('stroke', ok?'#0B8A5B':'#C1121F');
+    rt.textContent = ok?'\u2713  VALID':'\u2717  INVALID';
+    rt.setAttribute('fill', ok?'#0B8A5B':'#C1121F');
+    document.getElementById('sigstat').textContent = ok?'verified':'rejected';
+
+    switch(tam){
+      case 'none': note='Nothing was touched, so the verifier recomputes the same digest and the signature checks out. Note that verification needed <em>only</em> the public key \u2014 no shared secret, no prior contact with the signer.'; break;
+      case 'msg': note='One field of the message was changed in transit, so the digest changes completely (Chapter 3\u2019s avalanche effect), and the signature no longer corresponds. The verifier learns that <em>something</em> changed \u2014 not what, and not by whom.'; break;
+      case 'sig': note='The signature itself was corrupted. It no longer matches the message under any key. Note there is no partial credit and no useful error detail: a signature is valid or it is not, and revealing why would be an oracle.'; break;
+      case 'key': note='Message and signature are both intact, but the verifier used the wrong public key. This is the case that matters most in practice \u2014 it is exactly what happens when a machine-in-the-middle presents its own certificate. Everything is cryptographically well-formed and the identity is wrong, which is why binding keys to names (Part III) is the missing piece.'; break;
+    }
+
+    document.getElementById('sigout').innerHTML =
+      '<span style="color:#4A4F58">SHA-256(message)</span> = '+h.slice(0,48)+'\u2026<br>'+
+      '<span style="color:#1B4FD8">signature</span>        = '+delivSig.slice(0,48)+'\u2026<br>'+
+      '<span style="color:#D6006E">verified with</span>    = '+verifyKey+'<br><br>'+note+
+      '<br><br><span style="color:#4A4F58;font-size:.86rem">The signature above is a teaching stand-in built from SHA-256, not real Ed25519 \u2014 it demonstrates the message binding and key binding faithfully, but do not mistake it for a signature scheme.</span>';
+  }
+
+  msgEl.addEventListener('input',render);
+  document.querySelectorAll('[data-tam]').forEach(function(b){
+    b.addEventListener('click',function(){
+      tam=b.dataset.tam;
+      document.querySelectorAll('[data-tam]').forEach(function(x){x.classList.toggle('on',x===b);});
+      render();
+    });
+  });
+  render();
+})();
+</script>
+<script>
+/* ============================================================
+   The library manifest: every course, every chapter.
+   Add a chapter here and it appears in the side nav, the course
+   landing page, search, progress and prev/next navigation.
+
+   xref: [{course, n, why}]  declares a cross-course link.
+   ============================================================ */
+window.LIBRARY = {
+  title: "Field Notes",
+  tagline: "Interactive courses on the systems underneath everything.",
+
+  courses: [
+    /* ---------------------------------------------------------- */
+    {
+      id: "the-wire",
+      slug: "the-wire",
+      title: "The Wire",
+      subtitle: "Security \u00B7 Crypto \u00B7 TLS",
+      hero: "Everything between saying it and being believed",
+      blurb: "Computer security, cryptography, certificates and TLS, taught in dependency order. Each chapter's answer becomes the next chapter's question.",
+      parts: [
+        { id:"I",   name:"Foundations",              range:[1,2] },
+        { id:"II",  name:"Cryptographic primitives", range:[3,7] },
+        { id:"III", name:"Identity and trust",       range:[8,11] },
+        { id:"IV",  name:"TLS on the wire",          range:[12,17] },
+        { id:"V",   name:"Applied and operational",  range:[18,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-what-security-means.html", title:"What security actually means",
+          desc:"CIA triad, threat models, attacker capability classes, trust boundaries, defence in depth.",
+          keys:"cia confidentiality integrity availability threat model dolev-yao trust boundary kerckhoffs" },
+        { n:2, file:"02-adversary-toolkit.html", title:"The adversary's toolkit",
+          desc:"Where an attacker can stand and what that position buys them. Passive, active, MITM, replay, downgrade.",
+          keys:"mitm eavesdrop replay downgrade arp spoofing bgp hijack rogue ap side channel" },
+        { n:3, file:"03-hashing-integrity.html", title:"Hashing and integrity",
+          desc:"Preimage and collision resistance, SHA-2/3, the avalanche effect, HMAC, length extension.",
+          keys:"hash sha256 sha3 md5 collision preimage avalanche hmac length extension argon2" },
+        { n:4, file:"04-symmetric-encryption.html", title:"Symmetric encryption",
+          desc:"AES internals, block vs stream, ECB/CBC/CTR/GCM, IVs and nonces, AEAD and why it exists.",
+          keys:"aes symmetric block cipher ecb cbc ctr gcm chacha20 poly1305 aead iv nonce padding oracle" },
+        { n:5, file:"05-asymmetric-encryption.html", title:"Asymmetric encryption",
+          desc:"RSA and elliptic curves, what each half of a key pair can do, OAEP, key sizes that matter.",
+          keys:"rsa public key private key ecc elliptic curve p256 x25519 oaep modulus trapdoor" },
+        { n:6, file:"06-key-exchange.html", title:"Key exchange",
+          desc:"Diffie-Hellman step by step, ECDHE, forward secrecy, and why static RSA key transport died.",
+          keys:"diffie hellman dh ecdhe forward secrecy pfs shared secret discrete log x25519 logjam" },
+        { n:7, file:"07-digital-signatures.html", title:"Digital signatures",
+          desc:"Signing is not backwards encryption. RSA-PSS, ECDSA, Ed25519, and what a signature proves.",
+          keys:"signature sign verify rsa-pss ecdsa ed25519 nonce reuse non-repudiation" },
+        { n:8, file:"08-pki-trust-model.html", title:"The PKI trust model",
+          desc:"Why cryptography alone proves nothing about identity. Roots, intermediates, leaves, path building.",
+          keys:"pki root ca intermediate leaf chain of trust trust store path building cross-signing" },
+        { n:9, file:"09-inside-x509.html", title:"Inside an X.509 certificate",
+          desc:"Every field, byte by byte. DER and ASN.1, SAN vs CN, extensions, key usage, basic constraints.",
+          keys:"x509 asn1 der pem san cn extensions key usage basic constraints serial issuer subject" },
+        { n:10, file:"10-certificate-lifecycle.html", title:"Certificate lifecycle",
+          desc:"CSR to issuance to renewal. DV/OV/EV, ACME and Let's Encrypt, CAA records, private CAs.",
+          keys:"csr acme lets encrypt dv ov ev caa renewal cert-manager private ca issuance",
+          xref:[{course:"kubernetes", n:12, why:"cert-manager and ingress TLS in practice"}] },
+        { n:11, file:"11-revocation-transparency.html", title:"Revocation and transparency",
+          desc:"CRL, OCSP, stapling, must-staple, and Certificate Transparency logs and SCTs.",
+          keys:"crl ocsp stapling must-staple certificate transparency ct log sct revocation merkle" },
+        { n:12, file:"12-tls12-handshake.html", title:"The TLS 1.2 handshake",
+          desc:"Every message in order, with real bytes. ClientHello through Finished, and why each exists.",
+          keys:"tls 1.2 handshake clienthello serverhello certificate serverkeyexchange finished prf" },
+        { n:13, file:"13-tls13-handshake.html", title:"The TLS 1.3 handshake",
+          desc:"1-RTT and 0-RTT, the HKDF key schedule, and everything RFC 8446 deleted on purpose.",
+          keys:"tls 1.3 rfc8446 1-rtt 0-rtt early data hkdf key schedule helloretryrequest" },
+        { n:14, file:"14-cipher-suites.html", title:"Cipher suites decoded",
+          desc:"Reading a suite string, negotiation rules, ALPN, SNI, and Encrypted Client Hello.",
+          keys:"cipher suite negotiation alpn sni ech esni grease tls_aes_128_gcm_sha256" },
+        { n:15, file:"15-after-the-handshake.html", title:"After the handshake",
+          desc:"The record layer, sequence numbers, session resumption and tickets, rekeying, close_notify.",
+          keys:"record layer session resumption ticket psk rekey key update close_notify" },
+        { n:16, file:"16-mtls.html", title:"Mutual TLS",
+          desc:"Client certificates end to end: CertificateRequest, verification, and where mTLS belongs.",
+          keys:"mtls mutual tls client certificate certificaterequest certificateverify spiffe",
+          xref:[{course:"kubernetes", n:10, why:"service mesh mTLS between pods"}] },
+        { n:17, file:"17-when-tls-breaks.html", title:"When TLS breaks",
+          desc:"Decoding real errors, plus BEAST, CRIME, POODLE, Heartbleed, Logjam and downgrade attacks.",
+          keys:"error expired self-signed hostname mismatch unknown_ca beast crime poodle heartbleed" },
+        { n:18, file:"18-web-app-security.html", title:"Web application security",
+          desc:"OWASP Top 10 in practice: XSS, CSRF, SQLi, SSRF, plus HSTS, CSP, CORS and cookie flags.",
+          keys:"owasp xss csrf sqli ssrf hsts csp cors samesite httponly subresource integrity" },
+        { n:19, file:"19-authn-authz.html", title:"Authentication and authorization",
+          desc:"Password storage, MFA, sessions vs tokens, JWT pitfalls, OAuth 2.0, OIDC and SAML.",
+          keys:"authentication authorization argon2 bcrypt mfa totp webauthn passkey jwt oauth oidc saml rbac",
+          xref:[{course:"kubernetes", n:20, why:"how RBAC and bound service account tokens apply this"}] },
+        { n:20, file:"20-network-security.html", title:"Network security",
+          desc:"TCP/IP and where security attaches, firewalls, IPsec and WireGuard, DNSSEC, DoH/DoT, Zero Trust.",
+          keys:"tcp ip firewall vpn ipsec wireguard dns dnssec doh dot zero trust segmentation",
+          xref:[{course:"linux", n:15, why:"netfilter hooks and conntrack, where the rules actually run"}] },
+        { n:21, file:"21-secrets-key-management.html", title:"Secrets and key management",
+          desc:"HSMs, KMS, envelope encryption, rotation strategy, and keeping secrets out of CI/CD.",
+          keys:"hsm kms envelope encryption dek kek rotation vault sealed secrets secret scanning",
+          xref:[{course:"kubernetes", n:17, why:"why Kubernetes Secrets are not secret"}] },
+        { n:22, file:"22-cloud-kubernetes.html", title:"Security in cloud and Kubernetes",
+          desc:"TLS at ingress, service mesh mTLS, cert-manager, workload identity, network policy, pod hardening.",
+          keys:"kubernetes ingress service mesh istio linkerd cert-manager workload identity network policy",
+          xref:[{course:"kubernetes", n:13, why:"how network policy is actually enforced"},
+                {course:"linux", n:11, why:"capabilities, seccomp and LSMs underneath pod security"}] },
+        { n:23, file:"23-post-quantum.html", title:"Post-quantum and what comes next",
+          desc:"Shor and Grover, ML-KEM and ML-DSA, hybrid key exchange, harvest-now-decrypt-later.",
+          keys:"post quantum shor grover ml-kem kyber ml-dsa dilithium hybrid harvest now decrypt later" },
+        { n:24, file:"24-putting-it-together.html", title:"Putting it all together",
+          desc:"Capstone: one HTTPS request from keystroke to rendered page, every layer visible at once.",
+          keys:"capstone end to end https request dns tcp tls http rendering full path" }
+      ],
+      appendix: [
+        { file:"appendix-glossary.html", title:"Glossary", desc:"Every term used in the course, defined once.", soon:true },
+        { file:"appendix-openssl.html", title:"OpenSSL cheat sheet", desc:"The commands worth memorising, grouped by task.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "kubernetes",
+      slug: "kubernetes",
+      title: "Inside Out",
+      subtitle: "Kubernetes internals",
+      hero: "What actually happens when you type kubectl apply",
+      blurb: "Kubernetes as a set of cooperating control loops rather than a pile of YAML. Vendor-neutral throughout, from the API server request path to a packet reaching your pod.",
+      parts: [
+        { id:"I",   name:"The model",              range:[1,4] },
+        { id:"II",  name:"Scheduling and lifecycle", range:[5,8] },
+        { id:"III", name:"Networking",             range:[9,13] },
+        { id:"IV",  name:"Storage and state",      range:[14,15] },
+        { id:"V",   name:"Workloads",              range:[16,19] },
+        { id:"VI",  name:"Operating it",           range:[20,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-declarative-reconciliation.html", title:"Declarative reconciliation", soon:true,
+          desc:"Desired state, observed state, and the control loop that closes the gap. The one idea the rest of the system is built from.",
+          keys:"declarative imperative reconciliation control loop desired state observed state level triggered idempotent" },
+        { n:2, file:"02-api-server.html", title:"The API server", soon:true,
+          desc:"Groups, versions and kinds, spec and status, and the full request path: authentication, authorization, admission, validation, storage.",
+          keys:"api server gvk gvr spec status request path authentication authorization admission validation openapi",
+          xref:[{course:"the-wire", n:16, why:"the mTLS that authenticates every component to the API server"}] },
+        { n:3, file:"03-etcd.html", title:"etcd", soon:true,
+          desc:"Raft consensus, the revision model, watches, leases and compaction. Why cluster state is a single consistent log.",
+          keys:"etcd raft consensus quorum revision watch lease compaction defrag backup restore" },
+        { n:4, file:"04-controllers-informers.html", title:"Controllers and informers", soon:true,
+          desc:"The shared informer cache, work queues, resync, and why level-triggered logic survives missed events.",
+          keys:"controller informer lister workqueue resync level triggered edge triggered controller-runtime" },
+        { n:5, file:"05-scheduler.html", title:"The scheduler", soon:true,
+          desc:"Filter and score, node affinity, taints and tolerations, topology spread, and preemption.",
+          keys:"scheduler filter score predicate priority affinity anti-affinity taint toleration topology spread preemption" },
+        { n:6, file:"06-pod-lifecycle.html", title:"Pod lifecycle", soon:true,
+          desc:"Phases and conditions, init and sidecar containers, the three probe types, and graceful termination.",
+          keys:"pod lifecycle phase condition init container sidecar liveness readiness startup probe prestop sigterm grace period",
+          xref:[{course:"linux", n:13, why:"what SIGTERM and SIGKILL actually do to a process"}] },
+        { n:7, file:"07-kubelet.html", title:"The kubelet", soon:true,
+          desc:"The node agent's sync loop, PLEG, node status and heartbeats, and eviction under pressure.",
+          keys:"kubelet sync loop pleg node status heartbeat lease eviction pressure static pod cadvisor" },
+        { n:8, file:"08-container-runtime.html", title:"Container runtimes", soon:true,
+          desc:"CRI, containerd and runc, the OCI image and runtime specs, image pull and snapshotters.",
+          keys:"cri containerd runc oci image spec runtime spec snapshotter overlayfs registry pull",
+          xref:[{course:"linux", n:12, why:"build the same isolation by hand in fifty lines"}] },
+        { n:9, file:"09-network-model.html", title:"The network model", soon:true,
+          desc:"The flat addressing rules every CNI must satisfy, pod-to-pod paths, overlays versus native routing.",
+          keys:"cni network model flat addressing pod cidr overlay vxlan native routing veth bridge" },
+        { n:10, file:"10-services-kube-proxy.html", title:"Services and kube-proxy", soon:true,
+          desc:"ClusterIP as a fiction maintained by rules. iptables versus IPVS, EndpointSlices, session affinity.",
+          keys:"service clusterip nodeport loadbalancer kube-proxy iptables ipvs endpointslice dnat session affinity",
+          xref:[{course:"linux", n:15, why:"the netfilter chains those rules are written into"}] },
+        { n:11, file:"11-coredns.html", title:"DNS and service discovery", soon:true,
+          desc:"CoreDNS, the search domain list, and the ndots setting that quietly multiplies your query volume.",
+          keys:"coredns dns service discovery search domain ndots resolv.conf headless srv record" },
+        { n:12, file:"12-ingress-gateway.html", title:"Ingress and Gateway API", soon:true,
+          desc:"Ingress controllers, TLS termination, path and host routing, and what Gateway API changes.",
+          keys:"ingress controller gateway api httproute tls termination sni path routing cert-manager",
+          xref:[{course:"the-wire", n:10, why:"how those certificates are issued and renewed"}] },
+        { n:13, file:"13-network-policy.html", title:"Network policy", soon:true,
+          desc:"Default-allow is the starting point. Ingress and egress selectors, and how a CNI enforces them.",
+          keys:"network policy default allow deny ingress egress podselector namespaceselector cilium calico ebpf",
+          xref:[{course:"the-wire", n:22, why:"where this sits in a defence-in-depth design"}] },
+        { n:14, file:"14-storage-csi.html", title:"Volumes, PVs and CSI", soon:true,
+          desc:"The PV/PVC binding dance, StorageClasses and dynamic provisioning, CSI attach, mount and detach.",
+          keys:"volume persistentvolume persistentvolumeclaim storageclass dynamic provisioning csi attach mount reclaim policy",
+          xref:[{course:"linux", n:6, why:"what mounting actually does to a namespace"}] },
+        { n:15, file:"15-statefulsets.html", title:"StatefulSets", soon:true,
+          desc:"Stable identity, ordered rollout, headless services and per-replica volume claims.",
+          keys:"statefulset stable identity ordinal headless service pvc template ordered rollout partition" },
+        { n:16, file:"16-deployments-rollouts.html", title:"Deployments and rollouts", soon:true,
+          desc:"ReplicaSet mechanics, maxSurge and maxUnavailable, revision history, rollback and stuck rollouts.",
+          keys:"deployment replicaset rollout maxsurge maxunavailable revision history rollback progress deadline recreate" },
+        { n:17, file:"17-config-secrets.html", title:"ConfigMaps and Secrets", soon:true,
+          desc:"Projection into env and volumes, update propagation delay, immutability, and why Secrets are only base64.",
+          keys:"configmap secret projected volume env update propagation immutable base64 encryption at rest sealed secrets external secrets",
+          xref:[{course:"the-wire", n:21, why:"envelope encryption and doing this properly"}] },
+        { n:18, file:"18-resources-qos.html", title:"Requests, limits and QoS", soon:true,
+          desc:"How requests drive scheduling and limits drive enforcement. Guaranteed, Burstable, BestEffort, throttling and OOMKill.",
+          keys:"requests limits qos guaranteed burstable besteffort cpu throttling cfs quota oomkill memory pressure",
+          xref:[{course:"linux", n:10, why:"cgroups v2 is what enforces every one of these numbers"},
+                {course:"linux", n:5,  why:"how the OOM killer chooses its victim"}] },
+        { n:19, file:"19-autoscaling.html", title:"Autoscaling", soon:true,
+          desc:"The HPA algorithm and its stabilisation windows, VPA's conflict with it, and node autoscaling.",
+          keys:"hpa vpa cluster autoscaler karpenter metrics server custom metrics stabilisation scale to zero keda" },
+        { n:20, file:"20-rbac-identity.html", title:"RBAC and workload identity", soon:true,
+          desc:"Subjects, verbs and resources, role aggregation, service accounts and bound projected tokens.",
+          keys:"rbac role clusterrole binding subject verb service account bound token projected oidc workload identity impersonation",
+          xref:[{course:"the-wire", n:19, why:"the token and federation model underneath"}] },
+        { n:21, file:"21-admission-control.html", title:"Admission control", soon:true,
+          desc:"Mutating and validating webhooks, ordering, failure policy, and CEL-based policy without a webhook.",
+          keys:"admission webhook mutating validating failurepolicy cel validatingadmissionpolicy opa gatekeeper kyverno pod security admission" },
+        { n:22, file:"22-crds-operators.html", title:"CRDs and operators", soon:true,
+          desc:"Extending the API, owner references and garbage collection, finalizers, and the operator pattern.",
+          keys:"crd custom resource operator finalizer owner reference garbage collection status subresource conversion webhook" },
+        { n:23, file:"23-debugging.html", title:"Debugging by symptom", soon:true,
+          desc:"A decision tree from the error you actually see: Pending, CrashLoopBackOff, ImagePullBackOff, OOMKilled, DNS failures.",
+          keys:"debugging pending crashloopbackoff imagepullbackoff oomkilled evicted dns failure events describe ephemeral container" },
+        { n:24, file:"24-capstone.html", title:"Capstone: apply to answer", soon:true,
+          desc:"One manifest from kubectl to a packet arriving at a container, with every component visible at once.",
+          keys:"capstone end to end kubectl apply full path request lifecycle" }
+      ],
+      appendix: [
+        { file:"appendix-kubectl.html", title:"kubectl field guide", desc:"The commands and jsonpath queries worth memorising.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "linux",
+      slug: "linux",
+      title: "Under the Hood",
+      subtitle: "Linux internals",
+      hero: "The machine your abstractions are standing on",
+      blurb: "Processes, memory, filesystems and isolation, from the syscall boundary down. Part III is the foundation every container runtime is built from.",
+      parts: [
+        { id:"I",   name:"Foundations",          range:[1,5] },
+        { id:"II",  name:"I/O and filesystems",  range:[6,8] },
+        { id:"III", name:"Isolation",            range:[9,12] },
+        { id:"IV",  name:"Communication",        range:[13,15] },
+        { id:"V",   name:"Runtime and observability", range:[16,20] }
+      ],
+      chapters: [
+        { n:1, file:"01-kernel-boundary.html", title:"The kernel boundary", soon:true,
+          desc:"User space and kernel space, the syscall mechanism, the stable ABI, and reading a trace.",
+          keys:"syscall kernel user space ring privilege abi vdso strace errno context switch" },
+        { n:2, file:"02-processes.html", title:"Processes", soon:true,
+          desc:"task_struct, fork and exec and exit, PIDs and PPIDs, orphans and zombies, the process tree.",
+          keys:"process task_struct fork exec exit clone pid ppid zombie orphan reaping wait exit status" },
+        { n:3, file:"03-scheduler.html", title:"The scheduler", soon:true,
+          desc:"CFS and its EEVDF successor, virtual runtime, nice and weights, preemption and load average.",
+          keys:"scheduler cfs eevdf vruntime nice weight runqueue preemption load average cpu affinity latency" },
+        { n:4, file:"04-virtual-memory.html", title:"Virtual memory", soon:true,
+          desc:"Address translation level by level, page tables and the TLB, mmap, demand paging and copy-on-write.",
+          keys:"virtual memory page table tlb mmu address translation page fault demand paging copy on write huge pages rss vsz" },
+        { n:5, file:"05-memory-pressure.html", title:"Memory pressure", soon:true,
+          desc:"The page cache, dirty writeback, swap and reclaim, and exactly how the OOM killer picks a victim.",
+          keys:"page cache dirty writeback swap swappiness reclaim kswapd oom killer oom_score_adj psi memory pressure",
+          xref:[{course:"kubernetes", n:18, why:"how Kubernetes exposes these as limits and QoS"}] },
+        { n:6, file:"06-files-descriptors.html", title:"Files and descriptors", soon:true,
+          desc:"The VFS, inodes and dentries, the three-table model of open files, and what fork actually shares.",
+          keys:"vfs inode dentry file descriptor open file table fork share offset dup redirect mount namespace" },
+        { n:7, file:"07-filesystems.html", title:"Filesystems", soon:true,
+          desc:"Journaling, extents and allocation, and precisely what fsync does and does not promise.",
+          keys:"ext4 xfs btrfs journaling extent allocation fsync fdatasync durability barrier overlayfs tmpfs" },
+        { n:8, file:"08-block-io.html", title:"The block layer and modern I/O", soon:true,
+          desc:"Request queues and I/O schedulers, and the real difference between blocking, epoll and io_uring.",
+          keys:"block layer bio request queue scheduler mq-deadline none blocking nonblocking epoll io_uring direct io readahead" },
+        { n:9, file:"09-namespaces.html", title:"Namespaces", soon:true,
+          desc:"All seven namespace types, entering and creating them by hand, and how a PID looks different from inside.",
+          keys:"namespace pid mount network uts ipc user cgroup unshare nsenter setns clone flags rootless" },
+        { n:10, file:"10-cgroups.html", title:"cgroups v2", soon:true,
+          desc:"The unified hierarchy, cpu.max throttling, memory.high versus memory.max, and pressure stall information.",
+          keys:"cgroup v2 unified hierarchy controller cpu.max cpu.weight memory.high memory.max io.max psi throttling delegation",
+          xref:[{course:"kubernetes", n:18, why:"the requests and limits that write these files"}] },
+        { n:11, file:"11-capabilities-seccomp.html", title:"Capabilities, seccomp and LSMs", soon:true,
+          desc:"Splitting root into capabilities, filtering syscalls with BPF, and where SELinux and AppArmor sit.",
+          keys:"capabilities cap_net_bind setuid no_new_privs seccomp bpf filter selinux apparmor lsm privileged container",
+          xref:[{course:"the-wire", n:22, why:"pod hardening built on exactly these primitives"}] },
+        { n:12, file:"12-container-from-scratch.html", title:"Build a container from scratch", soon:true,
+          desc:"pivot_root plus namespaces plus cgroups plus seccomp, in about fifty lines. No runtime involved.",
+          keys:"container from scratch chroot pivot_root namespace cgroup seccomp rootfs overlay runc oci",
+          xref:[{course:"kubernetes", n:8, why:"what containerd and runc do with all of this"}] },
+        { n:13, file:"13-signals.html", title:"Signals", soon:true,
+          desc:"Delivery and handlers, async-signal-safety, SIGTERM versus SIGKILL, process groups and PID 1's special role.",
+          keys:"signal sigterm sigkill sighup sigchld handler async signal safe process group session pid 1 init zombie reaping",
+          xref:[{course:"kubernetes", n:6, why:"why your pod ignores SIGTERM and gets killed after 30 seconds"}] },
+        { n:14, file:"14-ipc.html", title:"Inter-process communication", soon:true,
+          desc:"Pipes and their buffer, unix domain sockets and fd passing, shared memory, eventfd and futexes.",
+          keys:"ipc pipe fifo unix domain socket scm_rights fd passing shared memory shm eventfd futex mutex message queue" },
+        { n:15, file:"15-network-stack.html", title:"The network stack", soon:true,
+          desc:"From socket write to NIC, the sk_buff, netfilter hook points, conntrack and where iptables rules run.",
+          keys:"socket sk_buff netfilter hook prerouting postrouting nat conntrack iptables nftables tc qdisc napi rss",
+          xref:[{course:"kubernetes", n:10, why:"kube-proxy writes rules into these exact chains"},
+                {course:"the-wire", n:20, why:"where firewalling and segmentation attach"}] },
+        { n:16, file:"16-elf-linking.html", title:"ELF, linking and loading", soon:true,
+          desc:"Sections and segments, static versus dynamic linking, the dynamic linker, PLT and GOT, LD_PRELOAD.",
+          keys:"elf section segment static dynamic linking ld.so plt got relocation symbol ld_preload rpath strip" },
+        { n:17, file:"17-proc-sys.html", title:"/proc and /sys", soon:true,
+          desc:"Where every monitoring tool gets its numbers, and how to read them without a tool at all.",
+          keys:"proc sys procfs sysfs pid status maps fd smaps stat meminfo cgroup sysctl top ps monitoring" },
+        { n:18, file:"18-ebpf.html", title:"eBPF", soon:true,
+          desc:"The verifier, maps, program types and attach points, plus bpftrace one-liners worth keeping.",
+          keys:"ebpf bpf verifier map kprobe uprobe tracepoint xdp tc bpftrace bcc observability cilium" },
+        { n:19, file:"19-performance.html", title:"Performance methodology", soon:true,
+          desc:"The USE method, flame graphs, perf, and telling a latency problem from a throughput problem.",
+          keys:"performance use method utilisation saturation errors flame graph perf latency throughput percentile off-cpu" },
+        { n:20, file:"20-boot.html", title:"Boot", soon:true,
+          desc:"Firmware to bootloader to kernel to initramfs to PID 1, and what systemd does with the units it finds.",
+          keys:"boot uefi bios grub kernel initramfs pid 1 systemd unit target dependency cgroup slice journald" }
+      ],
+      appendix: [
+        { file:"appendix-commands.html", title:"Command reference", desc:"The diagnostic commands worth memorising, grouped by subsystem.", soon:true }
+      ]
+    }
+  ]
+};
+
+/* Resolve the course this page belongs to. Pages set window.COURSE_ID. */
+window.getCourse = function (id) {
+  id = id || window.COURSE_ID;
+  return LIBRARY.courses.filter(function (c) { return c.id === id; })[0] || null;
+};
+
+</script>
+<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>
+/* Shared behaviour for every page in the library.
+   Pages declare where they are with:
+     window.COURSE_ID  = "linux"            (course landing and chapters)
+     document.body.dataset.chapter = "10"   (chapter pages only)
+     window.DEPTH      = 0 | 1 | 2          (folders below the library root)
+*/
+(function () {
+  'use strict';
+
+  var DEPTH = (typeof window.DEPTH === 'number') ? window.DEPTH : 0;
+  var UP = new Array(DEPTH + 1).join('../');
+
+  /* ---------- progress, namespaced per course ---------- */
+  var mem = {};
+  function key(cid) { return 'library.progress.' + cid + '.v1'; }
+  function read(cid) { try { return JSON.parse(localStorage.getItem(key(cid))) || {}; } catch (e) { return mem[cid] || {}; } }
+  function save(cid, o) { mem[cid] = o; try { localStorage.setItem(key(cid), JSON.stringify(o)); } catch (e) {} }
+
+  window.Progress = {
+    all:    function (cid) { return read(cid || window.COURSE_ID); },
+    isDone: function (n, cid) { return !!read(cid || window.COURSE_ID)[n]; },
+    set:    function (n, v, cid) {
+      cid = cid || window.COURSE_ID;
+      var o = read(cid); if (v) o[n] = 1; else delete o[n]; save(cid, o);
+    },
+    reset:  function (cid) { save(cid || window.COURSE_ID, {}); },
+    count:  function (cid) { return Object.keys(read(cid)).length; }
+  };
+
+  /* ---------- lab copy buttons ---------- */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-copy]');
+    if (!b) return;
+    var txt = b.closest('.lab').querySelector('pre').innerText;
+    var done = function () { var o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1400); };
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).then(done, done);
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+
+  /* ---------- quiz ---------- */
+  document.addEventListener('click', function (e) {
+    var opt = e.target.closest('.opt');
+    if (!opt) return;
+    var q = opt.closest('.q');
+    if (q.dataset.answered) return;
+    q.dataset.answered = '1';
+    var opts = Array.prototype.slice.call(q.querySelectorAll('.opt'));
+    var right = parseInt(q.dataset.answer, 10);
+    opts.forEach(function (o, i) { if (i === right) o.classList.add('right'); });
+    if (opts.indexOf(opt) !== right) opt.classList.add('wrong');
+    var why = q.querySelector('.why');
+    if (why) why.classList.add('show');
+  });
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  /* ---------- side navigation ---------- */
+  function buildNav() {
+    var host = document.getElementById('side');
+    if (!host || !window.LIBRARY) return;
+
+    var course = window.getCourse();
+    if (!course) return;
+
+    var cur = parseInt(document.body.dataset.chapter, 10) || 0;
+    var inChapters = !!document.body.dataset.chapter;
+    var chPre = inChapters ? '' : 'chapters/';
+    var courseHome = inChapters ? '../index.html' : 'index.html';
+
+    var switcher = LIBRARY.courses.map(function (c) {
+      var href = UP + c.slug + '/index.html';
+      return '<a class="cswitch' + (c.id === course.id ? ' on' : '') + '" href="' + href + '">' +
+             '<span class="cs-t">' + c.title + '</span>' +
+             '<span class="cs-s">' + c.subtitle + '</span></a>';
+    }).join('');
+
+    host.innerHTML =
+      '<a class="liblink" href="' + UP + 'index.html">&larr; ' + LIBRARY.title + '</a>' +
+      '<a class="brand" href="' + courseHome + '">' +
+        '<span class="bt">' + course.title + '</span>' +
+        '<span class="bs">' + course.subtitle + '</span></a>' +
+      '<button class="navtoggle" id="navtoggle">Contents &amp; search</button>' +
+      '<div class="navbody" id="navbody">' +
+        '<div class="cswitchwrap">' + switcher + '</div>' +
+        '<div class="navsearch"><span class="gl">&#9906;</span>' +
+          '<input id="navq" type="search" placeholder="Search this course" autocomplete="off"></div>' +
+        '<div class="navprog"><div class="bar"><div class="fill" id="navfill"></div></div>' +
+          '<div class="txt"><span id="navpt"></span><button id="navreset">Reset</button></div></div>' +
+        '<div id="navlists"></div>' +
+      '</div>';
+
+    var qEl = host.querySelector('#navq');
+
+    function renderLists() {
+      var f = qEl.value.trim().toLowerCase(), html = '', shown = 0;
+
+      course.parts.forEach(function (p) {
+        var chs = course.chapters.filter(function (c) {
+          if (c.n < p.range[0] || c.n > p.range[1]) return false;
+          if (!f) return true;
+          return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
+        });
+        if (!chs.length) return;
+        shown += chs.length;
+        html += '<p class="navpart">' + p.id + ' &middot; ' + p.name + '</p><ul class="navlist">';
+        chs.forEach(function (c) {
+          var cls = 'navlink' + (c.n === cur ? ' here' : '') +
+            (Progress.isDone(c.n, course.id) ? ' is-done' : '') + (c.soon ? ' is-soon' : '');
+          var inner = '<span class="nn">' + pad(c.n) + '</span><span>' + c.title + '</span>';
+          html += '<li>' + (c.soon ? '<span class="' + cls + '">' + inner + '</span>'
+                                   : '<a class="' + cls + '" href="' + chPre + c.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      });
+
+      var apx = (course.appendix || []).filter(function (a) {
+        return !f || (a.title + ' ' + a.desc).toLowerCase().indexOf(f) > -1;
+      });
+      if (apx.length) {
+        shown += apx.length;
+        html += '<p class="navpart">Appendix</p><ul class="navlist">';
+        apx.forEach(function (a) {
+          var inner = '<span class="nn">&mdash;</span><span>' + a.title + '</span>';
+          html += '<li>' + (a.soon ? '<span class="navlink is-soon">' + inner + '</span>'
+                                   : '<a class="navlink" href="' + chPre + a.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      }
+
+      if (!shown) html = '<p class="navempty">No chapter in this course matches. Search covers titles, summaries and keywords.</p>';
+      host.querySelector('#navlists').innerHTML = html;
+
+      var here = host.querySelector('.navlink.here');
+      if (here && !f) {
+        var top = here.offsetTop - host.clientHeight / 2;
+        if (top > 0) host.scrollTop = top;
+      }
+      if (typeof window.onCourseFilter === 'function') window.onCourseFilter(f);
+    }
+
+    function renderProgress() {
+      var n = Progress.count(course.id), t = course.chapters.length;
+      host.querySelector('#navfill').style.width = (n / t * 100) + '%';
+      host.querySelector('#navpt').textContent = n + ' / ' + t + ' complete';
+    }
+
+    qEl.addEventListener('input', renderLists);
+    host.querySelector('#navreset').addEventListener('click', function () {
+      Progress.reset(course.id); renderLists(); renderProgress();
+    });
+    host.querySelector('#navtoggle').addEventListener('click', function () {
+      host.querySelector('#navbody').classList.toggle('open');
+    });
+
+    window.refreshCourseNav = function () { renderLists(); renderProgress(); };
+    renderLists(); renderProgress();
+  }
+
+  /* ---------- chapter prev/next and completion ---------- */
+  function chapterChrome() {
+    var n = parseInt(document.body.dataset.chapter, 10);
+    var course = window.getCourse && window.getCourse();
+    if (!n || !course) return;
+
+    var chs = course.chapters;
+    var i = chs.findIndex(function (c) { return c.n === n; });
+    var prev = chs[i - 1], next = chs[i + 1], cur = chs[i];
+
+    function link(c, dir) {
+      if (!c) return '<span></span>';
+      var label = (dir === 'prev' ? '\u2190 ' : '') + pad(c.n) + ' \u00B7 ' + c.title + (dir === 'next' ? ' \u2192' : '');
+      return c.soon ? '<span style="opacity:.45">' + label + '</span>'
+                    : '<a href="' + c.file + '">' + label + '</a>';
+    }
+
+    var top = document.querySelector('.chapnav');
+    if (top) top.innerHTML = link(prev, 'prev') + '<a href="../index.html">All chapters</a>' + link(next, 'next');
+
+    var foot = document.querySelector('.chapfoot');
+    if (foot) foot.innerHTML = link(prev, 'prev') + link(next, 'next');
+
+    var db = document.querySelector('.donebar');
+    if (db) {
+      db.innerHTML = '<label><input type="checkbox" id="doneck"> Mark chapter ' + n + ', ' + cur.title + ', as complete</label>';
+      var ck = db.querySelector('#doneck');
+      ck.checked = Progress.isDone(n, course.id);
+      ck.addEventListener('change', function () {
+        Progress.set(n, ck.checked, course.id);
+        if (window.refreshCourseNav) window.refreshCourseNav();
+      });
+    }
+  }
+
+  /* ---------- cross-course reference rendering ---------- */
+  window.xrefHTML = function (c, fromCourseId) {
+    if (!c.xref || !c.xref.length) return '';
+    return '<span class="xrefs">' + c.xref.map(function (x) {
+      var tc = window.getCourse(x.course);
+      if (!tc) return '';
+      var tch = tc.chapters.filter(function (y) { return y.n === x.n; })[0];
+      if (!tch) return '';
+      var href = UP + tc.slug + '/chapters/' + tch.file;
+      var label = tc.subtitle + ' \u00B7 ' + pad(x.n) + ' ' + tch.title;
+      return '<span class="xref">' + (tch.soon
+        ? '<span class="xr-dead">' + label + '</span>'
+        : '<a href="' + href + '">' + label + '</a>') +
+        '<span class="xr-why">' + x.why + '</span></span>';
+    }).join('') + '</span>';
+  };
+
+  function init() { buildNav(); chapterChrome(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+</script>
+</body>
+</html>

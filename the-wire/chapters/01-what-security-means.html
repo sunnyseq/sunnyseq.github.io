@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1 · What security actually means — The Wire</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root{
+  --paper:#FBFBF7;
+  --paper-2:#F2F2EA;
+  --ink:#14161A;
+  --ink-soft:#4A4F58;
+  --rule:#DCDDD4;
+  --client:#1B4FD8;
+  --server:#D6006E;
+  --ok:#0B8A5B;
+  --warn:#E8A317;
+  --bad:#C1121F;
+  --display:'Space Grotesk',system-ui,sans-serif;
+  --body:'Source Serif 4',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --nav-w:296px;
+  --measure:78ch;
+}
+
+.course-the-wire  { --client:#1B4FD8; --server:#D6006E; }
+.course-kubernetes{ --client:#0F6E8C; --server:#E2622A; }
+.course-linux     { --client:#5C3D99; --server:#C48A16; }
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--body);font-size:18px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wire-rail{
+  height:3px;width:100%;position:fixed;top:0;left:0;z-index:80;
+  background:linear-gradient(90deg,var(--client) 0%,var(--client) 40%,var(--server) 60%,var(--server) 100%);
+}
+
+/* ============ two-column shell ============ */
+.layout{display:grid;grid-template-columns:var(--nav-w) minmax(0,1fr);align-items:start}
+
+.sidenav{
+  position:sticky;top:0;height:100vh;overflow-y:auto;overscroll-behavior:contain;
+  border-right:1px solid var(--rule);background:var(--paper-2);
+  padding:26px 22px 40px;
+}
+.sidenav::-webkit-scrollbar{width:8px}
+.sidenav::-webkit-scrollbar-thumb{background:#cfd0c6;border-radius:99px}
+
+.content{padding:48px 56px 110px;min-width:0}
+.col{max-width:var(--measure)}
+
+/* ============ side nav internals ============ */
+.brand{display:block;text-decoration:none;color:inherit;margin-bottom:4px}
+.brand .bt{font-family:var(--display);font-weight:700;font-size:1.32rem;letter-spacing:-.02em;line-height:1.1}
+.brand .bs{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-top:5px}
+.brand:hover .bt{color:var(--client)}
+
+.navsearch{
+  display:flex;align-items:center;gap:8px;margin:20px 0 16px;
+  border:1.5px solid var(--rule);background:#fff;padding:8px 10px;border-radius:2px;
+}
+.navsearch:focus-within{border-color:var(--ink)}
+.navsearch input{border:0;outline:0;background:transparent;width:100%;min-width:0;color:var(--ink);font:400 12.5px/1.4 var(--mono)}
+.navsearch .gl{font-size:12px;color:var(--ink-soft)}
+
+.navprog{margin-bottom:22px}
+.navprog .bar{height:5px;background:#e3e4db;border-radius:99px;overflow:hidden}
+.navprog .fill{height:100%;width:0;background:linear-gradient(90deg,var(--client),var(--server));transition:width .35s}
+.navprog .txt{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:7px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.navprog .txt button{font:inherit;background:none;border:0;color:var(--ink-soft);text-decoration:underline;cursor:pointer;padding:0}
+.navprog .txt button:hover{color:var(--bad)}
+
+.navpart{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);
+  margin:22px 0 7px;padding-bottom:5px;border-bottom:1px solid var(--rule);
+}
+.navlist{list-style:none;margin:0;padding:0}
+.navlist li{margin:0}
+.navlink{
+  display:grid;grid-template-columns:22px minmax(0,1fr);gap:9px;align-items:start;
+  padding:6px 8px 6px 6px;margin-left:-6px;border-radius:2px;
+  text-decoration:none;color:var(--ink);
+  font-family:var(--display);font-weight:400;font-size:12.9px;line-height:1.38;
+}
+.navlink:hover{background:#fff}
+.navlink .nn{font-family:var(--mono);font-size:10px;color:var(--ink-soft);padding-top:2px}
+.navlink.here{background:#fff;font-weight:600;box-shadow:inset 2px 0 0 var(--server)}
+.navlink.here .nn{color:var(--server)}
+.navlink.is-done .nn::after{content:" \2713";color:var(--ok)}
+.navlink.is-soon{color:#9a9e96;pointer-events:none}
+.navempty{font-family:var(--mono);font-size:11px;color:var(--ink-soft);padding:14px 0;line-height:1.6}
+
+/* ============ typography ============ */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 16px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(2rem,3.6vw,3.1rem);line-height:1.05;letter-spacing:-.025em;margin:0}
+h2{font-family:var(--display);font-weight:700;font-size:1.6rem;letter-spacing:-.015em;margin:3.2rem 0 .8rem;scroll-margin-top:24px}
+h3{font-family:var(--display);font-weight:500;font-size:1.16rem;margin:2.2rem 0 .5rem}
+p{margin:0 0 1.05em;max-width:var(--measure)}
+a{color:var(--client)}
+ul,ol{max-width:var(--measure);padding-left:1.25em}
+li{margin:.3em 0}
+strong{font-weight:600}
+code{font-family:var(--mono);font-size:.85em;background:var(--paper-2);padding:.12em .38em;border:1px solid var(--rule);border-radius:3px}
+
+header.masthead{padding:0 0 30px;border-bottom:1px solid var(--rule);margin-bottom:40px}
+.lede{font-size:1.16rem;line-height:1.55;color:var(--ink-soft);max-width:68ch;margin:18px 0 0}
+
+/* ============ index page ============ */
+.tocpart{
+  font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft);
+  margin:40px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--rule);max-width:var(--measure);
+}
+.toc{list-style:none;padding:0;margin:0;max-width:var(--measure)}
+.toc li{margin:0}
+.tocitem{
+  display:grid;grid-template-columns:50px minmax(0,1fr) auto;column-gap:16px;align-items:start;
+  padding:14px 12px;border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  transition:background .12s,padding-left .12s;
+}
+.tocitem:hover{background:#fff;padding-left:18px}
+.tocnum{font-family:var(--mono);font-size:12px;color:var(--client);font-weight:700;padding-top:3px}
+.toctitle{display:block;font-family:var(--display);font-weight:600;font-size:1.06rem;line-height:1.3;letter-spacing:-.01em}
+.tocdesc{display:block;font-size:.9rem;color:var(--ink-soft);line-height:1.5;margin-top:5px}
+.tocstate{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;padding-top:5px}
+.tocitem.done{background:#fff}
+.tocitem.done .tocstate{color:var(--ok)}
+.tocitem.done .tocnum::after{content:" \2713";color:var(--ok)}
+.tocitem.soon{opacity:.5}
+
+/* ============ chapter chrome ============ */
+.chapnav{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:0 0 22px;margin-bottom:26px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;max-width:var(--measure)}
+.chapnav a{text-decoration:none;color:var(--ink-soft)}
+.chapnav a:hover{color:var(--client)}
+.chapfoot{display:flex;justify-content:space-between;gap:16px;margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12.5px;max-width:var(--measure)}
+.donebar{margin:52px 0 0;padding:20px;background:#fff;border:1px solid var(--rule);border-left:3px solid var(--ok);max-width:var(--measure)}
+.donebar label{font-family:var(--mono);font-size:12.5px;display:flex;gap:10px;align-items:center;cursor:pointer;line-height:1.4}
+.donebar input{width:18px;height:18px;accent-color:var(--ok);flex:none}
+
+/* ============ content blocks ============ */
+.callout{border-left:3px solid var(--client);background:#fff;padding:16px 20px;margin:1.8em 0;max-width:var(--measure);font-size:.96rem}
+.callout.warn{border-left-color:var(--warn)}
+.callout.bad{border-left-color:var(--bad)}
+.callout.rfc{border-left-color:var(--ink-soft)}
+.callout .tag{font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px}
+.callout p:last-child{margin-bottom:0}
+
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:#fff;border:1px solid var(--rule);border-top:3px solid var(--ink);padding:16px;overflow-x:auto;margin:1.6em 0;max-width:var(--measure)}
+pre code{background:none;border:0;padding:0;font-size:inherit}
+.lab{margin:1.8em 0;max-width:var(--measure)}
+.lab .labhead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;background:var(--ink);color:var(--paper);padding:7px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.lab .labhead button{font:inherit;background:transparent;border:1px solid rgba(255,255,255,.4);color:var(--paper);padding:3px 8px;cursor:pointer;border-radius:2px}
+.lab .labhead button:hover{background:rgba(255,255,255,.15)}
+.lab pre{margin:0;border-top:0;max-width:none}
+
+table{border-collapse:collapse;width:100%;max-width:var(--measure);margin:1.6em 0;font-size:.9rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+td code{font-size:.84em}
+
+/* ============ interactive frame ============ */
+.demo{border:1px solid var(--rule);background:#fff;margin:2.2em 0;max-width:var(--measure)}
+.demo .demohead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);padding:9px 16px;border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.demo .demobody{padding:20px}
+.demo .demonote{padding:12px 16px;border-top:1px solid var(--rule);background:var(--paper-2);font-size:.86rem;color:var(--ink-soft);line-height:1.55}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.ctl label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft)}
+.ctl input[type=text],.ctl input[type=number],.ctl select,textarea{font-family:var(--mono);font-size:13px;padding:7px 9px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);border-radius:2px}
+textarea{width:100%;resize:vertical}
+.chip{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink-soft)}
+.chip:hover{border-color:var(--ink)}
+.chip[aria-pressed=true],.chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.out{font-family:var(--mono);font-size:12.5px;word-break:break-word;background:var(--paper-2);border:1px solid var(--rule);padding:12px;line-height:1.7}
+svg{max-width:100%;height:auto;display:block}
+.hexdump{font-family:var(--mono);font-size:12px;line-height:1.8;word-break:break-all}
+.hexdump .hl{background:#FFF0A8;outline:1px solid var(--warn)}
+
+/* ============ quiz ============ */
+.quiz{border:1px solid var(--rule);background:#fff;padding:22px;margin:2.4em 0;max-width:var(--measure)}
+.quiz h3{margin-top:0}
+.q{margin:0 0 22px;padding-bottom:18px;border-bottom:1px dashed var(--rule)}
+.q:last-of-type{border-bottom:0;padding-bottom:0}
+.q p.qtext{font-weight:600;margin-bottom:10px}
+.opts{display:flex;flex-direction:column;gap:7px}
+.opt{text-align:left;font-family:var(--body);font-size:.95rem;line-height:1.45;padding:9px 13px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink)}
+.opt:hover{border-color:var(--ink)}
+.opt.right{border-color:var(--ok);background:#E8F6F0;box-shadow:inset 3px 0 0 var(--ok)}
+.opt.wrong{border-color:var(--bad);background:#FBEAEA;box-shadow:inset 3px 0 0 var(--bad)}
+.why{font-size:.88rem;color:var(--ink-soft);margin-top:9px;display:none;border-left:2px solid var(--rule);padding-left:12px}
+.why.show{display:block}
+
+/* ============ responsive ============ */
+.navtoggle{
+  display:none;width:100%;text-align:left;margin-top:14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  background:#fff;border:1px solid var(--rule);color:var(--ink-soft);padding:9px 12px;cursor:pointer;border-radius:2px;
+}
+
+@media (max-width:1240px){ :root{--nav-w:258px} .content{padding:44px 40px 100px} }
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidenav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--rule);padding:22px 20px 24px}
+  .navtoggle{display:block}
+  .navbody{display:none;margin-top:16px}
+  .navbody.open{display:block}
+  .content{padding:32px 20px 80px}
+  body{font-size:17px}
+  .tocitem{grid-template-columns:38px minmax(0,1fr);column-gap:10px}
+  .tocstate{display:none}
+  .chapnav,.chapfoot{flex-direction:column;align-items:flex-start;gap:8px}
+}
+
+
+
+/* ============ library landing ============ */
+.libwrap{max-width:1000px;margin:0 auto;padding:74px 40px 110px}
+.libhead{border-bottom:1px solid var(--rule);padding-bottom:34px;margin-bottom:12px}
+.libhead h1{font-size:clamp(2.2rem,4.4vw,3.5rem)}
+.libmeta{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-top:26px;display:flex;gap:22px;flex-wrap:wrap}
+
+.courses{display:grid;gap:0;margin-top:8px}
+.ccard{
+  display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:40px;align-items:start;
+  padding:38px 20px 38px 24px;margin-left:-24px;
+  border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  position:relative;transition:background .14s;
+}
+.ccard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--c1),var(--c2));opacity:.85}
+.ccard:hover{background:#fff}
+.ccard.locked{opacity:.62;cursor:default}
+.cc-sub{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:10px}
+.cc-title{font-family:var(--display);font-weight:700;font-size:1.85rem;letter-spacing:-.022em;line-height:1.08;margin:0 0 4px}
+.cc-hero{font-family:var(--display);font-weight:400;font-size:1.02rem;color:var(--ink-soft);margin:0 0 14px;line-height:1.35}
+.cc-blurb{font-size:.95rem;line-height:1.6;color:var(--ink-soft);margin:0;max-width:56ch}
+.cc-parts{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:16px;line-height:1.9}
+.cc-parts b{color:var(--ink);font-weight:400}
+
+.cc-side{padding-top:26px}
+.ring{display:block;margin:0 0 12px}
+.cc-stat{font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.8}
+.cc-stat strong{color:var(--ink);font-weight:700}
+.cc-go{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;margin-top:14px;display:inline-block}
+.ccard:hover .cc-go{color:var(--server)}
+
+/* ============ course switcher in the side nav ============ */
+.liblink{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;margin-bottom:16px}
+.liblink:hover{color:var(--ink)}
+.cswitchwrap{display:grid;gap:3px;margin:0 0 20px;padding-bottom:18px;border-bottom:1px solid var(--rule)}
+.cswitch{display:block;text-decoration:none;padding:7px 9px;border-radius:2px;border:1px solid transparent}
+.cswitch:hover{background:#fff}
+.cswitch.on{background:#fff;border-color:var(--rule)}
+.cs-t{display:block;font-family:var(--display);font-weight:600;font-size:12.5px;color:var(--ink);line-height:1.2}
+.cs-s{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:3px}
+.cswitch.on .cs-t{color:var(--server)}
+
+/* ============ cross-course references ============ */
+.xrefs{display:block;margin-top:9px;display:flex;flex-direction:column;gap:4px}
+.xref{display:block;font-family:var(--mono);font-size:10.5px;line-height:1.5;padding-left:13px;position:relative}
+.xref::before{content:"\2197";position:absolute;left:0;top:0;color:var(--server);font-size:10px}
+.xref a{text-decoration:none;color:var(--client);border-bottom:1px solid rgba(27,79,216,.28)}
+.xref a:hover{border-bottom-color:var(--client)}
+.xr-dead{color:var(--ink-soft)}
+.xr-why{color:var(--ink-soft);margin-left:7px}
+
+.callout.xref-note{border-left-color:var(--server);background:#fff}
+.callout.xref-note .tag{color:var(--server)}
+
+@media (max-width:820px){
+  .libwrap{padding:44px 20px 80px}
+  .ccard{grid-template-columns:1fr;gap:20px;padding:28px 16px;margin-left:-16px}
+  .cc-side{padding-top:0;display:flex;align-items:center;gap:18px}
+  .ring{margin:0}
+}
+@media print{ .cswitchwrap,.liblink{display:none!important} }
+
+/* ============ print ============ */
+@media print{
+  :root{--paper:#fff;--measure:none}
+  body{font-size:11pt}
+  .wire-rail,.sidenav,.chapnav,.chapfoot,.donebar,.chip,.lab .labhead button,.navtoggle{display:none!important}
+  .layout{display:block}
+  .content{padding:0}
+  .demo,.quiz,pre,.callout,table{break-inside:avoid;border-color:#999}
+  a{color:inherit;text-decoration:none}
+  a[href^="http"]::after{content:" (" attr(href) ")";font-size:8pt;color:#666}
+  h2{break-after:avoid}
+  .why{display:block!important}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body class="course-the-wire" data-chapter="1">
+<div class="wire-rail"></div>
+<div class="layout">
+<aside class="sidenav" id="side"></aside>
+<main class="content">
+<nav class="chapnav"></nav>
+
+<header class="masthead">
+  <p class="eyebrow">Part I &nbsp;·&nbsp; Foundations &nbsp;·&nbsp; Chapter 01</p>
+  <h1>What security actually means</h1>
+  <p class="lede">Before any cryptography, a claim: security is not a property of a system. It is a property of a system <em>relative to a stated adversary</em>. Change the adversary and the same system flips from secure to broken without a line of code changing.</p>
+</header>
+
+<div class="col">
+
+<h2>1.1 The three properties</h2>
+
+<p>Almost every security requirement you will ever write reduces to one of three properties, traditionally called the CIA triad. They are worth stating precisely, because the imprecise versions cause real bugs.</p>
+
+<table>
+<thead><tr><th>Property</th><th>Precise statement</th><th>Primary mechanism</th></tr></thead>
+<tbody>
+<tr><td><strong>Confidentiality</strong></td><td>An adversary who observes the data learns nothing about the plaintext beyond its length and timing.</td><td>Encryption (Ch. 4, 5)</td></tr>
+<tr><td><strong>Integrity</strong></td><td>Any modification of the data is detected with overwhelming probability before the data is acted upon.</td><td>MACs and signatures (Ch. 3, 7)</td></tr>
+<tr><td><strong>Availability</strong></td><td>The legitimate party can obtain the service within its stated bound, despite adversarial load.</td><td>Capacity, rate limits, filtering (Ch. 20)</td></tr>
+</tbody>
+</table>
+
+<p>Note what confidentiality does <em>not</em> promise. Length and timing leak. TLS hides what you asked a server, but not that you asked, not how big the answer was, and not when. A great deal of practical traffic analysis lives in that gap, and Chapter 14 covers the partial fixes (padding, ECH).</p>
+
+<p>Two properties are usually bolted onto the triad because the triad alone cannot express them:</p>
+
+<ul>
+<li><strong>Authentication</strong> — the party at the other end is who they claim to be. This is the property that pure cryptography <em>cannot</em> give you, and the reason Part III exists at all.</li>
+<li><strong>Non-repudiation</strong> — the party cannot later deny having sent the message. Signatures give this; MACs deliberately do not, because both sides hold the same key and either could have produced the tag.</li>
+</ul>
+
+<div class="callout">
+  <span class="tag">The distinction that catches people</span>
+  <p>Encryption does not provide integrity. A classic CTR-mode ciphertext can be flipped bit-for-bit by an attacker who never learns the key: flip bit 7 of the ciphertext and bit 7 of the plaintext flips too. If your protocol encrypts <code>amount=0100</code> and does not authenticate it, an attacker who knows the format can make it <code>amount=9100</code>. This single mistake is why AEAD (Chapter 4) exists and why "just encrypt it" is never a complete answer.</p>
+</div>
+
+<h2>1.2 The threat model is the specification</h2>
+
+<p>A threat model answers four questions. If you cannot answer all four, you do not yet have a security requirement, you have a wish.</p>
+
+<ol>
+<li><strong>What are we protecting?</strong> Name the asset concretely: session cookies, the signing key, patient records at rest.</li>
+<li><strong>Who is the adversary and what can they do?</strong> Their <em>capabilities</em>, not their motives.</li>
+<li><strong>What are we assuming they cannot do?</strong> The assumptions are the load-bearing part. Every real compromise is an assumption that turned out to be false.</li>
+<li><strong>What does failure look like?</strong> What is the observable bad outcome you are buying insurance against.</li>
+</ol>
+
+<h3>Capability classes</h3>
+
+<p>Adversaries are classified by what they can do to the channel, not by who they are. This is the ladder, and each rung strictly contains the one below it.</p>
+
+<table>
+<thead><tr><th>Class</th><th>Can do</th><th>Real example</th><th>Defeated by</th></tr></thead>
+<tbody>
+<tr><td>Passive / eavesdropper</td><td>Read every byte in transit</td><td>Wi-Fi sniffing, tapped fibre, ISP logging</td><td>Encryption alone</td></tr>
+<tr><td>Active / Dolev–Yao</td><td>Read, drop, delay, reorder, replay, inject, forge source addresses</td><td>Rogue access point, ARP or BGP hijack, malicious middlebox</td><td>Encryption + authentication + freshness</td></tr>
+<tr><td>Endpoint-capable</td><td>All of the above, plus code execution on one endpoint</td><td>Malware, malicious browser extension, compromised CI runner</td><td>Nothing on the wire helps. Isolation, HSMs, attestation.</td></tr>
+<tr><td>Trust-anchor-capable</td><td>Can issue a certificate any client will believe</td><td>Compromised or coerced CA, enterprise TLS-inspecting proxy with its root installed</td><td>Certificate Transparency, pinning (Ch. 11)</td></tr>
+</tbody>
+</table>
+
+<p>The <strong>Dolev–Yao model</strong> (1983) is the default assumption for all internet protocol design, and it is worth internalising in its strongest form: <em>the network is the adversary</em>. The attacker is not merely on the path, the attacker <em>is</em> the path. They deliver your packets as a courtesy. Every protocol in Part IV is designed against exactly this assumption.</p>
+
+<div class="callout rfc">
+  <span class="tag">RFC 3552 §3</span>
+  <p>The IETF's guidelines for writing security considerations formalise the same baseline: internet protocols must assume the attacker has complete control of the communication channel, and can read, modify, delete and inject at will. Anything weaker is not a valid assumption for a protocol that runs on the public internet.</p>
+</div>
+
+<h2>1.3 Kerckhoffs's principle</h2>
+
+<p>Stated in 1883 for military ciphers, and still the sharpest line in the field: <em>a cryptosystem must remain secure even if everything about the system, except the key, is public knowledge.</em> Shannon's terser restatement is "the enemy knows the system."</p>
+
+<p>This is not a moral position about open source. It is a practical claim about what can be replaced. Algorithms cannot be rotated: they are baked into hardware, libraries, standards and a decade of deployed devices. Keys can be rotated in seconds. So all of the secrecy must be concentrated in the part you can cheaply change. A design whose security depends on the algorithm staying secret has a single, unrotatable, permanently compromisable secret.</p>
+
+<p>The practical test: <strong>if a design document leaking would break your system, the design is the problem.</strong></p>
+
+<h2>1.4 Trust boundaries and the shape of a system</h2>
+
+<p>A trust boundary is any line across which data changes trust level. Data that was fully controlled by an attacker on one side becomes input to your logic on the other. Every serious vulnerability class in Chapter 18 — injection, deserialisation, SSRF — is a trust boundary that someone forgot to mark.</p>
+
+<p>The diagram below is a plain three-tier web system. Click a boundary to see what crosses it, what an attacker controls on the far side, and which control belongs there.</p>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · trust boundaries</span><span id="tbhint">Click a dashed line</span></div>
+  <div class="demobody">
+    <svg viewBox="0 0 720 250" role="img" aria-label="Three-tier system with trust boundaries">
+      <defs>
+        <style>
+          .node{fill:#fff;stroke:#DCDDD4;stroke-width:1.5}
+          .nlab{font:600 13px 'Space Grotesk',sans-serif;fill:#14161A}
+          .nsub{font:400 10px 'JetBrains Mono',monospace;fill:#4A4F58}
+          .bnd{stroke:#1B4FD8;stroke-width:2.5;stroke-dasharray:6 5;cursor:pointer}
+          .bnd:hover{stroke:#D6006E;stroke-width:4}
+          .bnd.sel{stroke:#D6006E;stroke-width:4;stroke-dasharray:none}
+          .blab{font:700 10px 'JetBrains Mono',monospace;fill:#1B4FD8;cursor:pointer;letter-spacing:.06em}
+          .flow{stroke:#4A4F58;stroke-width:1.5;marker-end:url(#ar)}
+        </style>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="#4A4F58"/>
+        </marker>
+      </defs>
+
+      <rect class="node" x="14" y="86" width="112" height="60" rx="3"/>
+      <text class="nlab" x="70" y="110" text-anchor="middle">Browser</text>
+      <text class="nsub" x="70" y="128" text-anchor="middle">attacker-owned</text>
+
+      <rect class="node" x="212" y="86" width="112" height="60" rx="3"/>
+      <text class="nlab" x="268" y="110" text-anchor="middle">Edge / LB</text>
+      <text class="nsub" x="268" y="128" text-anchor="middle">TLS terminates</text>
+
+      <rect class="node" x="410" y="86" width="112" height="60" rx="3"/>
+      <text class="nlab" x="466" y="110" text-anchor="middle">App</text>
+      <text class="nsub" x="466" y="128" text-anchor="middle">your code</text>
+
+      <rect class="node" x="600" y="86" width="106" height="60" rx="3"/>
+      <text class="nlab" x="653" y="110" text-anchor="middle">Database</text>
+      <text class="nsub" x="653" y="128" text-anchor="middle">crown jewels</text>
+
+      <line class="flow" x1="128" y1="116" x2="206" y2="116"/>
+      <line class="flow" x1="326" y1="116" x2="404" y2="116"/>
+      <line class="flow" x1="524" y1="116" x2="594" y2="116"/>
+
+      <line class="bnd" data-b="0" x1="167" y1="40" x2="167" y2="200"/>
+      <text class="blab" data-b="0" x="167" y="30" text-anchor="middle">TB-1</text>
+
+      <line class="bnd" data-b="1" x1="365" y1="40" x2="365" y2="200"/>
+      <text class="blab" data-b="1" x="365" y="30" text-anchor="middle">TB-2</text>
+
+      <line class="bnd" data-b="2" x1="558" y1="40" x2="558" y2="200"/>
+      <text class="blab" data-b="2" x="558" y="30" text-anchor="middle">TB-3</text>
+
+      <text class="nsub" x="14" y="228">untrusted</text>
+      <text class="nsub" x="600" y="228">most trusted</text>
+    </svg>
+    <div class="out" id="tbout" style="margin-top:16px">Select a boundary above.</div>
+  </div>
+  <div class="demonote">Trust does not increase because data moved inwards. It increases only where something actively validated it. TB-2 is the boundary teams most often assume is safe because "it's inside the VPC" — that assumption is exactly what Zero Trust (Chapter 20) rejects.</div>
+</div>
+
+<script>
+var TB = [
+ {t:"TB-1 · Browser \u2192 Edge",
+  c:"Everything. URL, path, query, headers, cookies, body, method, TLS parameters, and the client's clock. The browser is running on the attacker's machine in the general case, so any client-side validation is a UX feature, not a control.",
+  d:"TLS for confidentiality and integrity in transit \u00B7 server certificate for authentication \u00B7 input validation and canonicalisation on the server \u00B7 rate limiting \u00B7 WAF as a speed bump, never as the control."},
+ {t:"TB-2 · Edge \u2192 App",
+  c:"After TLS terminates at the edge, the request is plaintext on the internal hop unless you re-encrypt. An attacker with any foothold in the internal network \u2014 a compromised sidecar, a misconfigured pod, a hijacked service account \u2014 reads and rewrites it. Headers the edge added, such as X-Forwarded-For or an auth-decision header, are forgeable by anything that can reach the app directly.",
+  d:"Re-encrypt with mTLS or a service mesh (Ch. 16, 22) \u00B7 network policy so only the edge can reach the app port \u00B7 strip and re-set trusted headers at the edge, never trust an inbound copy \u00B7 authenticate the workload, not the IP."},
+ {t:"TB-3 · App \u2192 Database",
+  c:"The query string, the parameters, and the credentials the app holds. If attacker-controlled text reaches this boundary uninterpolated, they control the query \u2014 that is SQL injection, and it is a trust-boundary failure, not a string-handling failure.",
+  d:"Parameterised statements exclusively \u00B7 least-privilege database roles per service \u00B7 TLS to the database \u00B7 credentials from a secret store with short TTL (Ch. 21) \u00B7 encryption at rest for the columns that matter."}
+];
+document.querySelectorAll('[data-b]').forEach(function(el){
+  el.addEventListener('click', function(){
+    var i = +el.dataset.b, o = TB[i];
+    document.querySelectorAll('.bnd').forEach(function(b){ b.classList.toggle('sel', +b.dataset.b === i); });
+    document.getElementById('tbhint').textContent = o.t;
+    document.getElementById('tbout').innerHTML =
+      '<strong>'+o.t+'</strong><br><br><span style="color:#D6006E">Attacker controls:</span> '+o.c+
+      '<br><br><span style="color:#0B8A5B">Controls that belong here:</span> '+o.d;
+  });
+});
+</script>
+
+<h2>1.5 Defence in depth, honestly</h2>
+
+<p>Defence in depth is widely misquoted as "more layers is better." The accurate version is narrower and more useful: <strong>layers should fail independently.</strong> Two controls that share an assumption are one control with extra cost.</p>
+
+<p>A worked example. You protect an admin endpoint with (a) a firewall rule allowing only the office IP range, and (b) a session cookie check. These fail independently — an attacker needs both a network position and a stolen session. Now replace (a) with "we check the <code>X-Forwarded-For</code> header for the office IP." Both controls now depend on the same assumption, that HTTP headers reaching the app are trustworthy. One forged header defeats both. You have two layers and one point of failure.</p>
+
+<p>The design question is never "how many layers do we have." It is <em>"name the single assumption whose failure defeats more than one of these."</em></p>
+
+<h3>Fail closed</h3>
+<p>Related, and cheap to get right: when a control cannot reach a decision, the default must deny. An authorisation service that times out and returns "allow" has converted an availability incident into a total authorisation bypass. The one deliberate exception is availability-critical safety systems, where a locked door in a fire is the worse outcome — and that exception should be written down, not stumbled into.</p>
+
+<h2>1.6 What cryptography does and does not buy you</h2>
+
+<p>Keep this list nearby for the rest of the course. Cryptography <strong>reduces</strong> problems; it does not eliminate them. Each primitive converts a large diffuse problem into a small concentrated one.</p>
+
+<table>
+<thead><tr><th>Primitive</th><th>Reduces this problem…</th><th>…to this one</th></tr></thead>
+<tbody>
+<tr><td>Symmetric encryption</td><td>Keeping a large message secret across an untrusted network</td><td>Keeping a 32-byte key secret at both ends</td></tr>
+<tr><td>MAC</td><td>Detecting modification of a large message</td><td>Keeping a 32-byte key secret at both ends</td></tr>
+<tr><td>Key exchange</td><td>Both ends needing a shared key without ever meeting</td><td>Both ends knowing they exchanged with the right party</td></tr>
+<tr><td>Signature</td><td>Proving authorship to anyone</td><td>Everyone knowing the correct public key</td></tr>
+<tr><td>PKI</td><td>Everyone knowing every correct public key</td><td>Everyone knowing a handful of correct root keys</td></tr>
+</tbody>
+</table>
+
+<p>Read the right-hand column downwards and you have the plot of this entire course. Each chapter's answer becomes the next chapter's question, and the sequence bottoms out at Part III with a genuinely unresolved problem: the root store on your device is trusted because your operating system vendor said so. There is no cryptographic step below that. It is a human and institutional trust decision, and Chapters 8 and 11 are about making that decision auditable rather than making it disappear.</p>
+
+<h2>1.7 Lab · look at what is already there</h2>
+
+<p>Every machine you use already contains the trust anchors this course will spend Part III unpacking. Count them before you have any theory about them.</p>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · inspect your trust store</span><button data-copy>Copy</button></div>
+<pre><code># Debian/Ubuntu/WSL: how many organisations can vouch for any site you visit?
+grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/ca-certificates.crt
+
+# List the ones your system will believe, by common name
+awk -v cmd='openssl x509 -noout -subject' '/BEGIN/{close(cmd)};{print | cmd}' \
+  /etc/ssl/certs/ca-certificates.crt | sed 's/.*CN *= *//' | sort -u | head -40
+
+# macOS equivalent
+security find-certificate -a /System/Library/Keychains/SystemRootCertificates.keychain \
+  | grep -c "labl"</code></pre>
+</div>
+
+<p>Typical answer: 130 to 150. Every one of those organisations can, technically, issue a certificate for your bank that your browser will accept without complaint. That is the actual size of the trust decision you make by opening a browser, and it is the problem Certificate Transparency was invented to make visible.</p>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">A service encrypts its session tokens with AES-CTR but does not authenticate them. An attacker who has never seen the key modifies a ciphertext in transit. Which property has failed?</p>
+    <div class="opts">
+      <button class="opt">Confidentiality — the attacker read the token</button>
+      <button class="opt">Integrity — undetected modification, even without knowing the key</button>
+      <button class="opt">Availability — the service can no longer respond</button>
+      <button class="opt">None — encryption already covers this</button>
+    </div>
+    <p class="why">CTR mode is a stream cipher: ciphertext is plaintext XOR keystream. Flipping a ciphertext bit flips the same plaintext bit, so an attacker who knows the message format can make targeted edits without ever recovering the key. Confidentiality holds; integrity does not. This is precisely why AEAD modes exist.</p>
+  </div>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">Kerckhoffs's principle is best justified by which argument?</p>
+    <div class="opts">
+      <button class="opt">Open source software is inherently more secure than closed source</button>
+      <button class="opt">Public algorithms are mathematically stronger than secret ones</button>
+      <button class="opt">Keys can be rotated cheaply and algorithms cannot, so all secrecy should live in the key</button>
+      <button class="opt">Attackers will reverse-engineer the algorithm eventually anyway</button>
+    </div>
+    <p class="why">The last option is true but is not the core argument — it is about inevitability, not design. The principle is about where recovery is possible: a leaked key is a rotation, a leaked algorithm you depended on is an unrecoverable redesign across every deployed device.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">Which pair of controls is <em>not</em> genuine defence in depth?</p>
+    <div class="opts">
+      <button class="opt">Checking an office IP in the X-Forwarded-For header, plus a JWT whose issuer is also read from a request header</button>
+      <button class="opt">A network policy restricting the source pod, plus mTLS client-certificate verification</button>
+      <button class="opt">Parameterised queries, plus a least-privilege database role</button>
+      <button class="opt">A hardware security module, plus quorum approval for key export</button>
+    </div>
+    <p class="why">Both controls in the first option trust attacker-supplied HTTP headers. One forged request defeats both, so they share a single assumption and provide one layer at the cost of two. The others fail independently: different mechanisms, different assumptions, different attacker prerequisites.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Under the Dolev–Yao model, which capability may an attacker <em>not</em> be assumed to have?</p>
+    <div class="opts">
+      <button class="opt">Dropping any packet they choose</button>
+      <button class="opt">Replaying a message captured an hour earlier</button>
+      <button class="opt">Injecting packets with a forged source address</button>
+      <button class="opt">Reading the contents of an honest party's memory</button>
+    </div>
+    <p class="why">Dolev–Yao gives the attacker total control of the <em>network</em>, but the endpoints remain honest and their internal state is private. Endpoint compromise is a strictly stronger model, and no transport protocol defends against it — which is why Chapter 21 moves keys into HSMs rather than trying to solve it on the wire.</p>
+  </div>
+</div>
+
+<h2>1.8 What to carry into Chapter 2</h2>
+<ul>
+<li>Security claims are always relative to a stated adversary. "Is this secure?" is not a well-formed question.</li>
+<li>Confidentiality, integrity and availability are distinct and require distinct mechanisms. Encryption alone gives you exactly one of them.</li>
+<li>Authentication cannot be derived from cryptography alone — that gap is what Part III is for.</li>
+<li>Assume the network is hostile by default, because on the public internet it demonstrably is.</li>
+<li>Layers only count when they fail independently.</li>
+</ul>
+
+<p>Next we make the adversary concrete: we put them at specific points on a real network path and look at exactly what each position gives them.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
+</main>
+</div>
+<script>
+/* ============================================================
+   The library manifest: every course, every chapter.
+   Add a chapter here and it appears in the side nav, the course
+   landing page, search, progress and prev/next navigation.
+
+   xref: [{course, n, why}]  declares a cross-course link.
+   ============================================================ */
+window.LIBRARY = {
+  title: "Field Notes",
+  tagline: "Interactive courses on the systems underneath everything.",
+
+  courses: [
+    /* ---------------------------------------------------------- */
+    {
+      id: "the-wire",
+      slug: "the-wire",
+      title: "The Wire",
+      subtitle: "Security \u00B7 Crypto \u00B7 TLS",
+      hero: "Everything between saying it and being believed",
+      blurb: "Computer security, cryptography, certificates and TLS, taught in dependency order. Each chapter's answer becomes the next chapter's question.",
+      parts: [
+        { id:"I",   name:"Foundations",              range:[1,2] },
+        { id:"II",  name:"Cryptographic primitives", range:[3,7] },
+        { id:"III", name:"Identity and trust",       range:[8,11] },
+        { id:"IV",  name:"TLS on the wire",          range:[12,17] },
+        { id:"V",   name:"Applied and operational",  range:[18,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-what-security-means.html", title:"What security actually means",
+          desc:"CIA triad, threat models, attacker capability classes, trust boundaries, defence in depth.",
+          keys:"cia confidentiality integrity availability threat model dolev-yao trust boundary kerckhoffs" },
+        { n:2, file:"02-adversary-toolkit.html", title:"The adversary's toolkit",
+          desc:"Where an attacker can stand and what that position buys them. Passive, active, MITM, replay, downgrade.",
+          keys:"mitm eavesdrop replay downgrade arp spoofing bgp hijack rogue ap side channel" },
+        { n:3, file:"03-hashing-integrity.html", title:"Hashing and integrity",
+          desc:"Preimage and collision resistance, SHA-2/3, the avalanche effect, HMAC, length extension.",
+          keys:"hash sha256 sha3 md5 collision preimage avalanche hmac length extension argon2" },
+        { n:4, file:"04-symmetric-encryption.html", title:"Symmetric encryption",
+          desc:"AES internals, block vs stream, ECB/CBC/CTR/GCM, IVs and nonces, AEAD and why it exists.",
+          keys:"aes symmetric block cipher ecb cbc ctr gcm chacha20 poly1305 aead iv nonce padding oracle" },
+        { n:5, file:"05-asymmetric-encryption.html", title:"Asymmetric encryption",
+          desc:"RSA and elliptic curves, what each half of a key pair can do, OAEP, key sizes that matter.",
+          keys:"rsa public key private key ecc elliptic curve p256 x25519 oaep modulus trapdoor" },
+        { n:6, file:"06-key-exchange.html", title:"Key exchange",
+          desc:"Diffie-Hellman step by step, ECDHE, forward secrecy, and why static RSA key transport died.",
+          keys:"diffie hellman dh ecdhe forward secrecy pfs shared secret discrete log x25519 logjam" },
+        { n:7, file:"07-digital-signatures.html", title:"Digital signatures",
+          desc:"Signing is not backwards encryption. RSA-PSS, ECDSA, Ed25519, and what a signature proves.",
+          keys:"signature sign verify rsa-pss ecdsa ed25519 nonce reuse non-repudiation" },
+        { n:8, file:"08-pki-trust-model.html", title:"The PKI trust model",
+          desc:"Why cryptography alone proves nothing about identity. Roots, intermediates, leaves, path building.",
+          keys:"pki root ca intermediate leaf chain of trust trust store path building cross-signing" },
+        { n:9, file:"09-inside-x509.html", title:"Inside an X.509 certificate",
+          desc:"Every field, byte by byte. DER and ASN.1, SAN vs CN, extensions, key usage, basic constraints.",
+          keys:"x509 asn1 der pem san cn extensions key usage basic constraints serial issuer subject" },
+        { n:10, file:"10-certificate-lifecycle.html", title:"Certificate lifecycle",
+          desc:"CSR to issuance to renewal. DV/OV/EV, ACME and Let's Encrypt, CAA records, private CAs.",
+          keys:"csr acme lets encrypt dv ov ev caa renewal cert-manager private ca issuance",
+          xref:[{course:"kubernetes", n:12, why:"cert-manager and ingress TLS in practice"}] },
+        { n:11, file:"11-revocation-transparency.html", title:"Revocation and transparency",
+          desc:"CRL, OCSP, stapling, must-staple, and Certificate Transparency logs and SCTs.",
+          keys:"crl ocsp stapling must-staple certificate transparency ct log sct revocation merkle" },
+        { n:12, file:"12-tls12-handshake.html", title:"The TLS 1.2 handshake",
+          desc:"Every message in order, with real bytes. ClientHello through Finished, and why each exists.",
+          keys:"tls 1.2 handshake clienthello serverhello certificate serverkeyexchange finished prf" },
+        { n:13, file:"13-tls13-handshake.html", title:"The TLS 1.3 handshake",
+          desc:"1-RTT and 0-RTT, the HKDF key schedule, and everything RFC 8446 deleted on purpose.",
+          keys:"tls 1.3 rfc8446 1-rtt 0-rtt early data hkdf key schedule helloretryrequest" },
+        { n:14, file:"14-cipher-suites.html", title:"Cipher suites decoded",
+          desc:"Reading a suite string, negotiation rules, ALPN, SNI, and Encrypted Client Hello.",
+          keys:"cipher suite negotiation alpn sni ech esni grease tls_aes_128_gcm_sha256" },
+        { n:15, file:"15-after-the-handshake.html", title:"After the handshake",
+          desc:"The record layer, sequence numbers, session resumption and tickets, rekeying, close_notify.",
+          keys:"record layer session resumption ticket psk rekey key update close_notify" },
+        { n:16, file:"16-mtls.html", title:"Mutual TLS",
+          desc:"Client certificates end to end: CertificateRequest, verification, and where mTLS belongs.",
+          keys:"mtls mutual tls client certificate certificaterequest certificateverify spiffe",
+          xref:[{course:"kubernetes", n:10, why:"service mesh mTLS between pods"}] },
+        { n:17, file:"17-when-tls-breaks.html", title:"When TLS breaks",
+          desc:"Decoding real errors, plus BEAST, CRIME, POODLE, Heartbleed, Logjam and downgrade attacks.",
+          keys:"error expired self-signed hostname mismatch unknown_ca beast crime poodle heartbleed" },
+        { n:18, file:"18-web-app-security.html", title:"Web application security",
+          desc:"OWASP Top 10 in practice: XSS, CSRF, SQLi, SSRF, plus HSTS, CSP, CORS and cookie flags.",
+          keys:"owasp xss csrf sqli ssrf hsts csp cors samesite httponly subresource integrity" },
+        { n:19, file:"19-authn-authz.html", title:"Authentication and authorization",
+          desc:"Password storage, MFA, sessions vs tokens, JWT pitfalls, OAuth 2.0, OIDC and SAML.",
+          keys:"authentication authorization argon2 bcrypt mfa totp webauthn passkey jwt oauth oidc saml rbac",
+          xref:[{course:"kubernetes", n:20, why:"how RBAC and bound service account tokens apply this"}] },
+        { n:20, file:"20-network-security.html", title:"Network security",
+          desc:"TCP/IP and where security attaches, firewalls, IPsec and WireGuard, DNSSEC, DoH/DoT, Zero Trust.",
+          keys:"tcp ip firewall vpn ipsec wireguard dns dnssec doh dot zero trust segmentation",
+          xref:[{course:"linux", n:15, why:"netfilter hooks and conntrack, where the rules actually run"}] },
+        { n:21, file:"21-secrets-key-management.html", title:"Secrets and key management",
+          desc:"HSMs, KMS, envelope encryption, rotation strategy, and keeping secrets out of CI/CD.",
+          keys:"hsm kms envelope encryption dek kek rotation vault sealed secrets secret scanning",
+          xref:[{course:"kubernetes", n:17, why:"why Kubernetes Secrets are not secret"}] },
+        { n:22, file:"22-cloud-kubernetes.html", title:"Security in cloud and Kubernetes",
+          desc:"TLS at ingress, service mesh mTLS, cert-manager, workload identity, network policy, pod hardening.",
+          keys:"kubernetes ingress service mesh istio linkerd cert-manager workload identity network policy",
+          xref:[{course:"kubernetes", n:13, why:"how network policy is actually enforced"},
+                {course:"linux", n:11, why:"capabilities, seccomp and LSMs underneath pod security"}] },
+        { n:23, file:"23-post-quantum.html", title:"Post-quantum and what comes next",
+          desc:"Shor and Grover, ML-KEM and ML-DSA, hybrid key exchange, harvest-now-decrypt-later.",
+          keys:"post quantum shor grover ml-kem kyber ml-dsa dilithium hybrid harvest now decrypt later" },
+        { n:24, file:"24-putting-it-together.html", title:"Putting it all together",
+          desc:"Capstone: one HTTPS request from keystroke to rendered page, every layer visible at once.",
+          keys:"capstone end to end https request dns tcp tls http rendering full path" }
+      ],
+      appendix: [
+        { file:"appendix-glossary.html", title:"Glossary", desc:"Every term used in the course, defined once.", soon:true },
+        { file:"appendix-openssl.html", title:"OpenSSL cheat sheet", desc:"The commands worth memorising, grouped by task.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "kubernetes",
+      slug: "kubernetes",
+      title: "Inside Out",
+      subtitle: "Kubernetes internals",
+      hero: "What actually happens when you type kubectl apply",
+      blurb: "Kubernetes as a set of cooperating control loops rather than a pile of YAML. Vendor-neutral throughout, from the API server request path to a packet reaching your pod.",
+      parts: [
+        { id:"I",   name:"The model",              range:[1,4] },
+        { id:"II",  name:"Scheduling and lifecycle", range:[5,8] },
+        { id:"III", name:"Networking",             range:[9,13] },
+        { id:"IV",  name:"Storage and state",      range:[14,15] },
+        { id:"V",   name:"Workloads",              range:[16,19] },
+        { id:"VI",  name:"Operating it",           range:[20,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-declarative-reconciliation.html", title:"Declarative reconciliation", soon:true,
+          desc:"Desired state, observed state, and the control loop that closes the gap. The one idea the rest of the system is built from.",
+          keys:"declarative imperative reconciliation control loop desired state observed state level triggered idempotent" },
+        { n:2, file:"02-api-server.html", title:"The API server", soon:true,
+          desc:"Groups, versions and kinds, spec and status, and the full request path: authentication, authorization, admission, validation, storage.",
+          keys:"api server gvk gvr spec status request path authentication authorization admission validation openapi",
+          xref:[{course:"the-wire", n:16, why:"the mTLS that authenticates every component to the API server"}] },
+        { n:3, file:"03-etcd.html", title:"etcd", soon:true,
+          desc:"Raft consensus, the revision model, watches, leases and compaction. Why cluster state is a single consistent log.",
+          keys:"etcd raft consensus quorum revision watch lease compaction defrag backup restore" },
+        { n:4, file:"04-controllers-informers.html", title:"Controllers and informers", soon:true,
+          desc:"The shared informer cache, work queues, resync, and why level-triggered logic survives missed events.",
+          keys:"controller informer lister workqueue resync level triggered edge triggered controller-runtime" },
+        { n:5, file:"05-scheduler.html", title:"The scheduler", soon:true,
+          desc:"Filter and score, node affinity, taints and tolerations, topology spread, and preemption.",
+          keys:"scheduler filter score predicate priority affinity anti-affinity taint toleration topology spread preemption" },
+        { n:6, file:"06-pod-lifecycle.html", title:"Pod lifecycle", soon:true,
+          desc:"Phases and conditions, init and sidecar containers, the three probe types, and graceful termination.",
+          keys:"pod lifecycle phase condition init container sidecar liveness readiness startup probe prestop sigterm grace period",
+          xref:[{course:"linux", n:13, why:"what SIGTERM and SIGKILL actually do to a process"}] },
+        { n:7, file:"07-kubelet.html", title:"The kubelet", soon:true,
+          desc:"The node agent's sync loop, PLEG, node status and heartbeats, and eviction under pressure.",
+          keys:"kubelet sync loop pleg node status heartbeat lease eviction pressure static pod cadvisor" },
+        { n:8, file:"08-container-runtime.html", title:"Container runtimes", soon:true,
+          desc:"CRI, containerd and runc, the OCI image and runtime specs, image pull and snapshotters.",
+          keys:"cri containerd runc oci image spec runtime spec snapshotter overlayfs registry pull",
+          xref:[{course:"linux", n:12, why:"build the same isolation by hand in fifty lines"}] },
+        { n:9, file:"09-network-model.html", title:"The network model", soon:true,
+          desc:"The flat addressing rules every CNI must satisfy, pod-to-pod paths, overlays versus native routing.",
+          keys:"cni network model flat addressing pod cidr overlay vxlan native routing veth bridge" },
+        { n:10, file:"10-services-kube-proxy.html", title:"Services and kube-proxy", soon:true,
+          desc:"ClusterIP as a fiction maintained by rules. iptables versus IPVS, EndpointSlices, session affinity.",
+          keys:"service clusterip nodeport loadbalancer kube-proxy iptables ipvs endpointslice dnat session affinity",
+          xref:[{course:"linux", n:15, why:"the netfilter chains those rules are written into"}] },
+        { n:11, file:"11-coredns.html", title:"DNS and service discovery", soon:true,
+          desc:"CoreDNS, the search domain list, and the ndots setting that quietly multiplies your query volume.",
+          keys:"coredns dns service discovery search domain ndots resolv.conf headless srv record" },
+        { n:12, file:"12-ingress-gateway.html", title:"Ingress and Gateway API", soon:true,
+          desc:"Ingress controllers, TLS termination, path and host routing, and what Gateway API changes.",
+          keys:"ingress controller gateway api httproute tls termination sni path routing cert-manager",
+          xref:[{course:"the-wire", n:10, why:"how those certificates are issued and renewed"}] },
+        { n:13, file:"13-network-policy.html", title:"Network policy", soon:true,
+          desc:"Default-allow is the starting point. Ingress and egress selectors, and how a CNI enforces them.",
+          keys:"network policy default allow deny ingress egress podselector namespaceselector cilium calico ebpf",
+          xref:[{course:"the-wire", n:22, why:"where this sits in a defence-in-depth design"}] },
+        { n:14, file:"14-storage-csi.html", title:"Volumes, PVs and CSI", soon:true,
+          desc:"The PV/PVC binding dance, StorageClasses and dynamic provisioning, CSI attach, mount and detach.",
+          keys:"volume persistentvolume persistentvolumeclaim storageclass dynamic provisioning csi attach mount reclaim policy",
+          xref:[{course:"linux", n:6, why:"what mounting actually does to a namespace"}] },
+        { n:15, file:"15-statefulsets.html", title:"StatefulSets", soon:true,
+          desc:"Stable identity, ordered rollout, headless services and per-replica volume claims.",
+          keys:"statefulset stable identity ordinal headless service pvc template ordered rollout partition" },
+        { n:16, file:"16-deployments-rollouts.html", title:"Deployments and rollouts", soon:true,
+          desc:"ReplicaSet mechanics, maxSurge and maxUnavailable, revision history, rollback and stuck rollouts.",
+          keys:"deployment replicaset rollout maxsurge maxunavailable revision history rollback progress deadline recreate" },
+        { n:17, file:"17-config-secrets.html", title:"ConfigMaps and Secrets", soon:true,
+          desc:"Projection into env and volumes, update propagation delay, immutability, and why Secrets are only base64.",
+          keys:"configmap secret projected volume env update propagation immutable base64 encryption at rest sealed secrets external secrets",
+          xref:[{course:"the-wire", n:21, why:"envelope encryption and doing this properly"}] },
+        { n:18, file:"18-resources-qos.html", title:"Requests, limits and QoS", soon:true,
+          desc:"How requests drive scheduling and limits drive enforcement. Guaranteed, Burstable, BestEffort, throttling and OOMKill.",
+          keys:"requests limits qos guaranteed burstable besteffort cpu throttling cfs quota oomkill memory pressure",
+          xref:[{course:"linux", n:10, why:"cgroups v2 is what enforces every one of these numbers"},
+                {course:"linux", n:5,  why:"how the OOM killer chooses its victim"}] },
+        { n:19, file:"19-autoscaling.html", title:"Autoscaling", soon:true,
+          desc:"The HPA algorithm and its stabilisation windows, VPA's conflict with it, and node autoscaling.",
+          keys:"hpa vpa cluster autoscaler karpenter metrics server custom metrics stabilisation scale to zero keda" },
+        { n:20, file:"20-rbac-identity.html", title:"RBAC and workload identity", soon:true,
+          desc:"Subjects, verbs and resources, role aggregation, service accounts and bound projected tokens.",
+          keys:"rbac role clusterrole binding subject verb service account bound token projected oidc workload identity impersonation",
+          xref:[{course:"the-wire", n:19, why:"the token and federation model underneath"}] },
+        { n:21, file:"21-admission-control.html", title:"Admission control", soon:true,
+          desc:"Mutating and validating webhooks, ordering, failure policy, and CEL-based policy without a webhook.",
+          keys:"admission webhook mutating validating failurepolicy cel validatingadmissionpolicy opa gatekeeper kyverno pod security admission" },
+        { n:22, file:"22-crds-operators.html", title:"CRDs and operators", soon:true,
+          desc:"Extending the API, owner references and garbage collection, finalizers, and the operator pattern.",
+          keys:"crd custom resource operator finalizer owner reference garbage collection status subresource conversion webhook" },
+        { n:23, file:"23-debugging.html", title:"Debugging by symptom", soon:true,
+          desc:"A decision tree from the error you actually see: Pending, CrashLoopBackOff, ImagePullBackOff, OOMKilled, DNS failures.",
+          keys:"debugging pending crashloopbackoff imagepullbackoff oomkilled evicted dns failure events describe ephemeral container" },
+        { n:24, file:"24-capstone.html", title:"Capstone: apply to answer", soon:true,
+          desc:"One manifest from kubectl to a packet arriving at a container, with every component visible at once.",
+          keys:"capstone end to end kubectl apply full path request lifecycle" }
+      ],
+      appendix: [
+        { file:"appendix-kubectl.html", title:"kubectl field guide", desc:"The commands and jsonpath queries worth memorising.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "linux",
+      slug: "linux",
+      title: "Under the Hood",
+      subtitle: "Linux internals",
+      hero: "The machine your abstractions are standing on",
+      blurb: "Processes, memory, filesystems and isolation, from the syscall boundary down. Part III is the foundation every container runtime is built from.",
+      parts: [
+        { id:"I",   name:"Foundations",          range:[1,5] },
+        { id:"II",  name:"I/O and filesystems",  range:[6,8] },
+        { id:"III", name:"Isolation",            range:[9,12] },
+        { id:"IV",  name:"Communication",        range:[13,15] },
+        { id:"V",   name:"Runtime and observability", range:[16,20] }
+      ],
+      chapters: [
+        { n:1, file:"01-kernel-boundary.html", title:"The kernel boundary", soon:true,
+          desc:"User space and kernel space, the syscall mechanism, the stable ABI, and reading a trace.",
+          keys:"syscall kernel user space ring privilege abi vdso strace errno context switch" },
+        { n:2, file:"02-processes.html", title:"Processes", soon:true,
+          desc:"task_struct, fork and exec and exit, PIDs and PPIDs, orphans and zombies, the process tree.",
+          keys:"process task_struct fork exec exit clone pid ppid zombie orphan reaping wait exit status" },
+        { n:3, file:"03-scheduler.html", title:"The scheduler", soon:true,
+          desc:"CFS and its EEVDF successor, virtual runtime, nice and weights, preemption and load average.",
+          keys:"scheduler cfs eevdf vruntime nice weight runqueue preemption load average cpu affinity latency" },
+        { n:4, file:"04-virtual-memory.html", title:"Virtual memory", soon:true,
+          desc:"Address translation level by level, page tables and the TLB, mmap, demand paging and copy-on-write.",
+          keys:"virtual memory page table tlb mmu address translation page fault demand paging copy on write huge pages rss vsz" },
+        { n:5, file:"05-memory-pressure.html", title:"Memory pressure", soon:true,
+          desc:"The page cache, dirty writeback, swap and reclaim, and exactly how the OOM killer picks a victim.",
+          keys:"page cache dirty writeback swap swappiness reclaim kswapd oom killer oom_score_adj psi memory pressure",
+          xref:[{course:"kubernetes", n:18, why:"how Kubernetes exposes these as limits and QoS"}] },
+        { n:6, file:"06-files-descriptors.html", title:"Files and descriptors", soon:true,
+          desc:"The VFS, inodes and dentries, the three-table model of open files, and what fork actually shares.",
+          keys:"vfs inode dentry file descriptor open file table fork share offset dup redirect mount namespace" },
+        { n:7, file:"07-filesystems.html", title:"Filesystems", soon:true,
+          desc:"Journaling, extents and allocation, and precisely what fsync does and does not promise.",
+          keys:"ext4 xfs btrfs journaling extent allocation fsync fdatasync durability barrier overlayfs tmpfs" },
+        { n:8, file:"08-block-io.html", title:"The block layer and modern I/O", soon:true,
+          desc:"Request queues and I/O schedulers, and the real difference between blocking, epoll and io_uring.",
+          keys:"block layer bio request queue scheduler mq-deadline none blocking nonblocking epoll io_uring direct io readahead" },
+        { n:9, file:"09-namespaces.html", title:"Namespaces", soon:true,
+          desc:"All seven namespace types, entering and creating them by hand, and how a PID looks different from inside.",
+          keys:"namespace pid mount network uts ipc user cgroup unshare nsenter setns clone flags rootless" },
+        { n:10, file:"10-cgroups.html", title:"cgroups v2", soon:true,
+          desc:"The unified hierarchy, cpu.max throttling, memory.high versus memory.max, and pressure stall information.",
+          keys:"cgroup v2 unified hierarchy controller cpu.max cpu.weight memory.high memory.max io.max psi throttling delegation",
+          xref:[{course:"kubernetes", n:18, why:"the requests and limits that write these files"}] },
+        { n:11, file:"11-capabilities-seccomp.html", title:"Capabilities, seccomp and LSMs", soon:true,
+          desc:"Splitting root into capabilities, filtering syscalls with BPF, and where SELinux and AppArmor sit.",
+          keys:"capabilities cap_net_bind setuid no_new_privs seccomp bpf filter selinux apparmor lsm privileged container",
+          xref:[{course:"the-wire", n:22, why:"pod hardening built on exactly these primitives"}] },
+        { n:12, file:"12-container-from-scratch.html", title:"Build a container from scratch", soon:true,
+          desc:"pivot_root plus namespaces plus cgroups plus seccomp, in about fifty lines. No runtime involved.",
+          keys:"container from scratch chroot pivot_root namespace cgroup seccomp rootfs overlay runc oci",
+          xref:[{course:"kubernetes", n:8, why:"what containerd and runc do with all of this"}] },
+        { n:13, file:"13-signals.html", title:"Signals", soon:true,
+          desc:"Delivery and handlers, async-signal-safety, SIGTERM versus SIGKILL, process groups and PID 1's special role.",
+          keys:"signal sigterm sigkill sighup sigchld handler async signal safe process group session pid 1 init zombie reaping",
+          xref:[{course:"kubernetes", n:6, why:"why your pod ignores SIGTERM and gets killed after 30 seconds"}] },
+        { n:14, file:"14-ipc.html", title:"Inter-process communication", soon:true,
+          desc:"Pipes and their buffer, unix domain sockets and fd passing, shared memory, eventfd and futexes.",
+          keys:"ipc pipe fifo unix domain socket scm_rights fd passing shared memory shm eventfd futex mutex message queue" },
+        { n:15, file:"15-network-stack.html", title:"The network stack", soon:true,
+          desc:"From socket write to NIC, the sk_buff, netfilter hook points, conntrack and where iptables rules run.",
+          keys:"socket sk_buff netfilter hook prerouting postrouting nat conntrack iptables nftables tc qdisc napi rss",
+          xref:[{course:"kubernetes", n:10, why:"kube-proxy writes rules into these exact chains"},
+                {course:"the-wire", n:20, why:"where firewalling and segmentation attach"}] },
+        { n:16, file:"16-elf-linking.html", title:"ELF, linking and loading", soon:true,
+          desc:"Sections and segments, static versus dynamic linking, the dynamic linker, PLT and GOT, LD_PRELOAD.",
+          keys:"elf section segment static dynamic linking ld.so plt got relocation symbol ld_preload rpath strip" },
+        { n:17, file:"17-proc-sys.html", title:"/proc and /sys", soon:true,
+          desc:"Where every monitoring tool gets its numbers, and how to read them without a tool at all.",
+          keys:"proc sys procfs sysfs pid status maps fd smaps stat meminfo cgroup sysctl top ps monitoring" },
+        { n:18, file:"18-ebpf.html", title:"eBPF", soon:true,
+          desc:"The verifier, maps, program types and attach points, plus bpftrace one-liners worth keeping.",
+          keys:"ebpf bpf verifier map kprobe uprobe tracepoint xdp tc bpftrace bcc observability cilium" },
+        { n:19, file:"19-performance.html", title:"Performance methodology", soon:true,
+          desc:"The USE method, flame graphs, perf, and telling a latency problem from a throughput problem.",
+          keys:"performance use method utilisation saturation errors flame graph perf latency throughput percentile off-cpu" },
+        { n:20, file:"20-boot.html", title:"Boot", soon:true,
+          desc:"Firmware to bootloader to kernel to initramfs to PID 1, and what systemd does with the units it finds.",
+          keys:"boot uefi bios grub kernel initramfs pid 1 systemd unit target dependency cgroup slice journald" }
+      ],
+      appendix: [
+        { file:"appendix-commands.html", title:"Command reference", desc:"The diagnostic commands worth memorising, grouped by subsystem.", soon:true }
+      ]
+    }
+  ]
+};
+
+/* Resolve the course this page belongs to. Pages set window.COURSE_ID. */
+window.getCourse = function (id) {
+  id = id || window.COURSE_ID;
+  return LIBRARY.courses.filter(function (c) { return c.id === id; })[0] || null;
+};
+
+</script>
+<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>
+/* Shared behaviour for every page in the library.
+   Pages declare where they are with:
+     window.COURSE_ID  = "linux"            (course landing and chapters)
+     document.body.dataset.chapter = "10"   (chapter pages only)
+     window.DEPTH      = 0 | 1 | 2          (folders below the library root)
+*/
+(function () {
+  'use strict';
+
+  var DEPTH = (typeof window.DEPTH === 'number') ? window.DEPTH : 0;
+  var UP = new Array(DEPTH + 1).join('../');
+
+  /* ---------- progress, namespaced per course ---------- */
+  var mem = {};
+  function key(cid) { return 'library.progress.' + cid + '.v1'; }
+  function read(cid) { try { return JSON.parse(localStorage.getItem(key(cid))) || {}; } catch (e) { return mem[cid] || {}; } }
+  function save(cid, o) { mem[cid] = o; try { localStorage.setItem(key(cid), JSON.stringify(o)); } catch (e) {} }
+
+  window.Progress = {
+    all:    function (cid) { return read(cid || window.COURSE_ID); },
+    isDone: function (n, cid) { return !!read(cid || window.COURSE_ID)[n]; },
+    set:    function (n, v, cid) {
+      cid = cid || window.COURSE_ID;
+      var o = read(cid); if (v) o[n] = 1; else delete o[n]; save(cid, o);
+    },
+    reset:  function (cid) { save(cid || window.COURSE_ID, {}); },
+    count:  function (cid) { return Object.keys(read(cid)).length; }
+  };
+
+  /* ---------- lab copy buttons ---------- */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-copy]');
+    if (!b) return;
+    var txt = b.closest('.lab').querySelector('pre').innerText;
+    var done = function () { var o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1400); };
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).then(done, done);
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+
+  /* ---------- quiz ---------- */
+  document.addEventListener('click', function (e) {
+    var opt = e.target.closest('.opt');
+    if (!opt) return;
+    var q = opt.closest('.q');
+    if (q.dataset.answered) return;
+    q.dataset.answered = '1';
+    var opts = Array.prototype.slice.call(q.querySelectorAll('.opt'));
+    var right = parseInt(q.dataset.answer, 10);
+    opts.forEach(function (o, i) { if (i === right) o.classList.add('right'); });
+    if (opts.indexOf(opt) !== right) opt.classList.add('wrong');
+    var why = q.querySelector('.why');
+    if (why) why.classList.add('show');
+  });
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  /* ---------- side navigation ---------- */
+  function buildNav() {
+    var host = document.getElementById('side');
+    if (!host || !window.LIBRARY) return;
+
+    var course = window.getCourse();
+    if (!course) return;
+
+    var cur = parseInt(document.body.dataset.chapter, 10) || 0;
+    var inChapters = !!document.body.dataset.chapter;
+    var chPre = inChapters ? '' : 'chapters/';
+    var courseHome = inChapters ? '../index.html' : 'index.html';
+
+    var switcher = LIBRARY.courses.map(function (c) {
+      var href = UP + c.slug + '/index.html';
+      return '<a class="cswitch' + (c.id === course.id ? ' on' : '') + '" href="' + href + '">' +
+             '<span class="cs-t">' + c.title + '</span>' +
+             '<span class="cs-s">' + c.subtitle + '</span></a>';
+    }).join('');
+
+    host.innerHTML =
+      '<a class="liblink" href="' + UP + 'index.html">&larr; ' + LIBRARY.title + '</a>' +
+      '<a class="brand" href="' + courseHome + '">' +
+        '<span class="bt">' + course.title + '</span>' +
+        '<span class="bs">' + course.subtitle + '</span></a>' +
+      '<button class="navtoggle" id="navtoggle">Contents &amp; search</button>' +
+      '<div class="navbody" id="navbody">' +
+        '<div class="cswitchwrap">' + switcher + '</div>' +
+        '<div class="navsearch"><span class="gl">&#9906;</span>' +
+          '<input id="navq" type="search" placeholder="Search this course" autocomplete="off"></div>' +
+        '<div class="navprog"><div class="bar"><div class="fill" id="navfill"></div></div>' +
+          '<div class="txt"><span id="navpt"></span><button id="navreset">Reset</button></div></div>' +
+        '<div id="navlists"></div>' +
+      '</div>';
+
+    var qEl = host.querySelector('#navq');
+
+    function renderLists() {
+      var f = qEl.value.trim().toLowerCase(), html = '', shown = 0;
+
+      course.parts.forEach(function (p) {
+        var chs = course.chapters.filter(function (c) {
+          if (c.n < p.range[0] || c.n > p.range[1]) return false;
+          if (!f) return true;
+          return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
+        });
+        if (!chs.length) return;
+        shown += chs.length;
+        html += '<p class="navpart">' + p.id + ' &middot; ' + p.name + '</p><ul class="navlist">';
+        chs.forEach(function (c) {
+          var cls = 'navlink' + (c.n === cur ? ' here' : '') +
+            (Progress.isDone(c.n, course.id) ? ' is-done' : '') + (c.soon ? ' is-soon' : '');
+          var inner = '<span class="nn">' + pad(c.n) + '</span><span>' + c.title + '</span>';
+          html += '<li>' + (c.soon ? '<span class="' + cls + '">' + inner + '</span>'
+                                   : '<a class="' + cls + '" href="' + chPre + c.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      });
+
+      var apx = (course.appendix || []).filter(function (a) {
+        return !f || (a.title + ' ' + a.desc).toLowerCase().indexOf(f) > -1;
+      });
+      if (apx.length) {
+        shown += apx.length;
+        html += '<p class="navpart">Appendix</p><ul class="navlist">';
+        apx.forEach(function (a) {
+          var inner = '<span class="nn">&mdash;</span><span>' + a.title + '</span>';
+          html += '<li>' + (a.soon ? '<span class="navlink is-soon">' + inner + '</span>'
+                                   : '<a class="navlink" href="' + chPre + a.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      }
+
+      if (!shown) html = '<p class="navempty">No chapter in this course matches. Search covers titles, summaries and keywords.</p>';
+      host.querySelector('#navlists').innerHTML = html;
+
+      var here = host.querySelector('.navlink.here');
+      if (here && !f) {
+        var top = here.offsetTop - host.clientHeight / 2;
+        if (top > 0) host.scrollTop = top;
+      }
+      if (typeof window.onCourseFilter === 'function') window.onCourseFilter(f);
+    }
+
+    function renderProgress() {
+      var n = Progress.count(course.id), t = course.chapters.length;
+      host.querySelector('#navfill').style.width = (n / t * 100) + '%';
+      host.querySelector('#navpt').textContent = n + ' / ' + t + ' complete';
+    }
+
+    qEl.addEventListener('input', renderLists);
+    host.querySelector('#navreset').addEventListener('click', function () {
+      Progress.reset(course.id); renderLists(); renderProgress();
+    });
+    host.querySelector('#navtoggle').addEventListener('click', function () {
+      host.querySelector('#navbody').classList.toggle('open');
+    });
+
+    window.refreshCourseNav = function () { renderLists(); renderProgress(); };
+    renderLists(); renderProgress();
+  }
+
+  /* ---------- chapter prev/next and completion ---------- */
+  function chapterChrome() {
+    var n = parseInt(document.body.dataset.chapter, 10);
+    var course = window.getCourse && window.getCourse();
+    if (!n || !course) return;
+
+    var chs = course.chapters;
+    var i = chs.findIndex(function (c) { return c.n === n; });
+    var prev = chs[i - 1], next = chs[i + 1], cur = chs[i];
+
+    function link(c, dir) {
+      if (!c) return '<span></span>';
+      var label = (dir === 'prev' ? '\u2190 ' : '') + pad(c.n) + ' \u00B7 ' + c.title + (dir === 'next' ? ' \u2192' : '');
+      return c.soon ? '<span style="opacity:.45">' + label + '</span>'
+                    : '<a href="' + c.file + '">' + label + '</a>';
+    }
+
+    var top = document.querySelector('.chapnav');
+    if (top) top.innerHTML = link(prev, 'prev') + '<a href="../index.html">All chapters</a>' + link(next, 'next');
+
+    var foot = document.querySelector('.chapfoot');
+    if (foot) foot.innerHTML = link(prev, 'prev') + link(next, 'next');
+
+    var db = document.querySelector('.donebar');
+    if (db) {
+      db.innerHTML = '<label><input type="checkbox" id="doneck"> Mark chapter ' + n + ', ' + cur.title + ', as complete</label>';
+      var ck = db.querySelector('#doneck');
+      ck.checked = Progress.isDone(n, course.id);
+      ck.addEventListener('change', function () {
+        Progress.set(n, ck.checked, course.id);
+        if (window.refreshCourseNav) window.refreshCourseNav();
+      });
+    }
+  }
+
+  /* ---------- cross-course reference rendering ---------- */
+  window.xrefHTML = function (c, fromCourseId) {
+    if (!c.xref || !c.xref.length) return '';
+    return '<span class="xrefs">' + c.xref.map(function (x) {
+      var tc = window.getCourse(x.course);
+      if (!tc) return '';
+      var tch = tc.chapters.filter(function (y) { return y.n === x.n; })[0];
+      if (!tch) return '';
+      var href = UP + tc.slug + '/chapters/' + tch.file;
+      var label = tc.subtitle + ' \u00B7 ' + pad(x.n) + ' ' + tch.title;
+      return '<span class="xref">' + (tch.soon
+        ? '<span class="xr-dead">' + label + '</span>'
+        : '<a href="' + href + '">' + label + '</a>') +
+        '<span class="xr-why">' + x.why + '</span></span>';
+    }).join('') + '</span>';
+  };
+
+  function init() { buildNav(); chapterChrome(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+</script>
+</body>
+</html>

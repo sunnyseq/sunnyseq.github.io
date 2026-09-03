@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>11 · Revocation and transparency — The Wire</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root{
+  --paper:#FBFBF7;
+  --paper-2:#F2F2EA;
+  --ink:#14161A;
+  --ink-soft:#4A4F58;
+  --rule:#DCDDD4;
+  --client:#1B4FD8;
+  --server:#D6006E;
+  --ok:#0B8A5B;
+  --warn:#E8A317;
+  --bad:#C1121F;
+  --display:'Space Grotesk',system-ui,sans-serif;
+  --body:'Source Serif 4',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --nav-w:296px;
+  --measure:78ch;
+}
+
+.course-the-wire  { --client:#1B4FD8; --server:#D6006E; }
+.course-kubernetes{ --client:#0F6E8C; --server:#E2622A; }
+.course-linux     { --client:#5C3D99; --server:#C48A16; }
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--body);font-size:18px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wire-rail{
+  height:3px;width:100%;position:fixed;top:0;left:0;z-index:80;
+  background:linear-gradient(90deg,var(--client) 0%,var(--client) 40%,var(--server) 60%,var(--server) 100%);
+}
+
+/* ============ two-column shell ============ */
+.layout{display:grid;grid-template-columns:var(--nav-w) minmax(0,1fr);align-items:start}
+
+.sidenav{
+  position:sticky;top:0;height:100vh;overflow-y:auto;overscroll-behavior:contain;
+  border-right:1px solid var(--rule);background:var(--paper-2);
+  padding:26px 22px 40px;
+}
+.sidenav::-webkit-scrollbar{width:8px}
+.sidenav::-webkit-scrollbar-thumb{background:#cfd0c6;border-radius:99px}
+
+.content{padding:48px 56px 110px;min-width:0}
+.col{max-width:var(--measure)}
+
+/* ============ side nav internals ============ */
+.brand{display:block;text-decoration:none;color:inherit;margin-bottom:4px}
+.brand .bt{font-family:var(--display);font-weight:700;font-size:1.32rem;letter-spacing:-.02em;line-height:1.1}
+.brand .bs{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-top:5px}
+.brand:hover .bt{color:var(--client)}
+
+.navsearch{
+  display:flex;align-items:center;gap:8px;margin:20px 0 16px;
+  border:1.5px solid var(--rule);background:#fff;padding:8px 10px;border-radius:2px;
+}
+.navsearch:focus-within{border-color:var(--ink)}
+.navsearch input{border:0;outline:0;background:transparent;width:100%;min-width:0;color:var(--ink);font:400 12.5px/1.4 var(--mono)}
+.navsearch .gl{font-size:12px;color:var(--ink-soft)}
+
+.navprog{margin-bottom:22px}
+.navprog .bar{height:5px;background:#e3e4db;border-radius:99px;overflow:hidden}
+.navprog .fill{height:100%;width:0;background:linear-gradient(90deg,var(--client),var(--server));transition:width .35s}
+.navprog .txt{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:7px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.navprog .txt button{font:inherit;background:none;border:0;color:var(--ink-soft);text-decoration:underline;cursor:pointer;padding:0}
+.navprog .txt button:hover{color:var(--bad)}
+
+.navpart{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);
+  margin:22px 0 7px;padding-bottom:5px;border-bottom:1px solid var(--rule);
+}
+.navlist{list-style:none;margin:0;padding:0}
+.navlist li{margin:0}
+.navlink{
+  display:grid;grid-template-columns:22px minmax(0,1fr);gap:9px;align-items:start;
+  padding:6px 8px 6px 6px;margin-left:-6px;border-radius:2px;
+  text-decoration:none;color:var(--ink);
+  font-family:var(--display);font-weight:400;font-size:12.9px;line-height:1.38;
+}
+.navlink:hover{background:#fff}
+.navlink .nn{font-family:var(--mono);font-size:10px;color:var(--ink-soft);padding-top:2px}
+.navlink.here{background:#fff;font-weight:600;box-shadow:inset 2px 0 0 var(--server)}
+.navlink.here .nn{color:var(--server)}
+.navlink.is-done .nn::after{content:" \2713";color:var(--ok)}
+.navlink.is-soon{color:#9a9e96;pointer-events:none}
+.navempty{font-family:var(--mono);font-size:11px;color:var(--ink-soft);padding:14px 0;line-height:1.6}
+
+/* ============ typography ============ */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 16px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(2rem,3.6vw,3.1rem);line-height:1.05;letter-spacing:-.025em;margin:0}
+h2{font-family:var(--display);font-weight:700;font-size:1.6rem;letter-spacing:-.015em;margin:3.2rem 0 .8rem;scroll-margin-top:24px}
+h3{font-family:var(--display);font-weight:500;font-size:1.16rem;margin:2.2rem 0 .5rem}
+p{margin:0 0 1.05em;max-width:var(--measure)}
+a{color:var(--client)}
+ul,ol{max-width:var(--measure);padding-left:1.25em}
+li{margin:.3em 0}
+strong{font-weight:600}
+code{font-family:var(--mono);font-size:.85em;background:var(--paper-2);padding:.12em .38em;border:1px solid var(--rule);border-radius:3px}
+
+header.masthead{padding:0 0 30px;border-bottom:1px solid var(--rule);margin-bottom:40px}
+.lede{font-size:1.16rem;line-height:1.55;color:var(--ink-soft);max-width:68ch;margin:18px 0 0}
+
+/* ============ index page ============ */
+.tocpart{
+  font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft);
+  margin:40px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--rule);max-width:var(--measure);
+}
+.toc{list-style:none;padding:0;margin:0;max-width:var(--measure)}
+.toc li{margin:0}
+.tocitem{
+  display:grid;grid-template-columns:50px minmax(0,1fr) auto;column-gap:16px;align-items:start;
+  padding:14px 12px;border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  transition:background .12s,padding-left .12s;
+}
+.tocitem:hover{background:#fff;padding-left:18px}
+.tocnum{font-family:var(--mono);font-size:12px;color:var(--client);font-weight:700;padding-top:3px}
+.toctitle{display:block;font-family:var(--display);font-weight:600;font-size:1.06rem;line-height:1.3;letter-spacing:-.01em}
+.tocdesc{display:block;font-size:.9rem;color:var(--ink-soft);line-height:1.5;margin-top:5px}
+.tocstate{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;padding-top:5px}
+.tocitem.done{background:#fff}
+.tocitem.done .tocstate{color:var(--ok)}
+.tocitem.done .tocnum::after{content:" \2713";color:var(--ok)}
+.tocitem.soon{opacity:.5}
+
+/* ============ chapter chrome ============ */
+.chapnav{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:0 0 22px;margin-bottom:26px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;max-width:var(--measure)}
+.chapnav a{text-decoration:none;color:var(--ink-soft)}
+.chapnav a:hover{color:var(--client)}
+.chapfoot{display:flex;justify-content:space-between;gap:16px;margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12.5px;max-width:var(--measure)}
+.donebar{margin:52px 0 0;padding:20px;background:#fff;border:1px solid var(--rule);border-left:3px solid var(--ok);max-width:var(--measure)}
+.donebar label{font-family:var(--mono);font-size:12.5px;display:flex;gap:10px;align-items:center;cursor:pointer;line-height:1.4}
+.donebar input{width:18px;height:18px;accent-color:var(--ok);flex:none}
+
+/* ============ content blocks ============ */
+.callout{border-left:3px solid var(--client);background:#fff;padding:16px 20px;margin:1.8em 0;max-width:var(--measure);font-size:.96rem}
+.callout.warn{border-left-color:var(--warn)}
+.callout.bad{border-left-color:var(--bad)}
+.callout.rfc{border-left-color:var(--ink-soft)}
+.callout .tag{font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px}
+.callout p:last-child{margin-bottom:0}
+
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:#fff;border:1px solid var(--rule);border-top:3px solid var(--ink);padding:16px;overflow-x:auto;margin:1.6em 0;max-width:var(--measure)}
+pre code{background:none;border:0;padding:0;font-size:inherit}
+.lab{margin:1.8em 0;max-width:var(--measure)}
+.lab .labhead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;background:var(--ink);color:var(--paper);padding:7px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.lab .labhead button{font:inherit;background:transparent;border:1px solid rgba(255,255,255,.4);color:var(--paper);padding:3px 8px;cursor:pointer;border-radius:2px}
+.lab .labhead button:hover{background:rgba(255,255,255,.15)}
+.lab pre{margin:0;border-top:0;max-width:none}
+
+table{border-collapse:collapse;width:100%;max-width:var(--measure);margin:1.6em 0;font-size:.9rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+td code{font-size:.84em}
+
+/* ============ interactive frame ============ */
+.demo{border:1px solid var(--rule);background:#fff;margin:2.2em 0;max-width:var(--measure)}
+.demo .demohead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);padding:9px 16px;border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.demo .demobody{padding:20px}
+.demo .demonote{padding:12px 16px;border-top:1px solid var(--rule);background:var(--paper-2);font-size:.86rem;color:var(--ink-soft);line-height:1.55}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.ctl label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft)}
+.ctl input[type=text],.ctl input[type=number],.ctl select,textarea{font-family:var(--mono);font-size:13px;padding:7px 9px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);border-radius:2px}
+textarea{width:100%;resize:vertical}
+.chip{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink-soft)}
+.chip:hover{border-color:var(--ink)}
+.chip[aria-pressed=true],.chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.out{font-family:var(--mono);font-size:12.5px;word-break:break-word;background:var(--paper-2);border:1px solid var(--rule);padding:12px;line-height:1.7}
+svg{max-width:100%;height:auto;display:block}
+.hexdump{font-family:var(--mono);font-size:12px;line-height:1.8;word-break:break-all}
+.hexdump .hl{background:#FFF0A8;outline:1px solid var(--warn)}
+
+/* ============ quiz ============ */
+.quiz{border:1px solid var(--rule);background:#fff;padding:22px;margin:2.4em 0;max-width:var(--measure)}
+.quiz h3{margin-top:0}
+.q{margin:0 0 22px;padding-bottom:18px;border-bottom:1px dashed var(--rule)}
+.q:last-of-type{border-bottom:0;padding-bottom:0}
+.q p.qtext{font-weight:600;margin-bottom:10px}
+.opts{display:flex;flex-direction:column;gap:7px}
+.opt{text-align:left;font-family:var(--body);font-size:.95rem;line-height:1.45;padding:9px 13px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink)}
+.opt:hover{border-color:var(--ink)}
+.opt.right{border-color:var(--ok);background:#E8F6F0;box-shadow:inset 3px 0 0 var(--ok)}
+.opt.wrong{border-color:var(--bad);background:#FBEAEA;box-shadow:inset 3px 0 0 var(--bad)}
+.why{font-size:.88rem;color:var(--ink-soft);margin-top:9px;display:none;border-left:2px solid var(--rule);padding-left:12px}
+.why.show{display:block}
+
+/* ============ responsive ============ */
+.navtoggle{
+  display:none;width:100%;text-align:left;margin-top:14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  background:#fff;border:1px solid var(--rule);color:var(--ink-soft);padding:9px 12px;cursor:pointer;border-radius:2px;
+}
+
+@media (max-width:1240px){ :root{--nav-w:258px} .content{padding:44px 40px 100px} }
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidenav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--rule);padding:22px 20px 24px}
+  .navtoggle{display:block}
+  .navbody{display:none;margin-top:16px}
+  .navbody.open{display:block}
+  .content{padding:32px 20px 80px}
+  body{font-size:17px}
+  .tocitem{grid-template-columns:38px minmax(0,1fr);column-gap:10px}
+  .tocstate{display:none}
+  .chapnav,.chapfoot{flex-direction:column;align-items:flex-start;gap:8px}
+}
+
+
+
+/* ============ library landing ============ */
+.libwrap{max-width:1000px;margin:0 auto;padding:74px 40px 110px}
+.libhead{border-bottom:1px solid var(--rule);padding-bottom:34px;margin-bottom:12px}
+.libhead h1{font-size:clamp(2.2rem,4.4vw,3.5rem)}
+.libmeta{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-top:26px;display:flex;gap:22px;flex-wrap:wrap}
+
+.courses{display:grid;gap:0;margin-top:8px}
+.ccard{
+  display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:40px;align-items:start;
+  padding:38px 20px 38px 24px;margin-left:-24px;
+  border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  position:relative;transition:background .14s;
+}
+.ccard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--c1),var(--c2));opacity:.85}
+.ccard:hover{background:#fff}
+.ccard.locked{opacity:.62;cursor:default}
+.cc-sub{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:10px}
+.cc-title{font-family:var(--display);font-weight:700;font-size:1.85rem;letter-spacing:-.022em;line-height:1.08;margin:0 0 4px}
+.cc-hero{font-family:var(--display);font-weight:400;font-size:1.02rem;color:var(--ink-soft);margin:0 0 14px;line-height:1.35}
+.cc-blurb{font-size:.95rem;line-height:1.6;color:var(--ink-soft);margin:0;max-width:56ch}
+.cc-parts{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:16px;line-height:1.9}
+.cc-parts b{color:var(--ink);font-weight:400}
+
+.cc-side{padding-top:26px}
+.ring{display:block;margin:0 0 12px}
+.cc-stat{font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.8}
+.cc-stat strong{color:var(--ink);font-weight:700}
+.cc-go{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;margin-top:14px;display:inline-block}
+.ccard:hover .cc-go{color:var(--server)}
+
+/* ============ course switcher in the side nav ============ */
+.liblink{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;margin-bottom:16px}
+.liblink:hover{color:var(--ink)}
+.cswitchwrap{display:grid;gap:3px;margin:0 0 20px;padding-bottom:18px;border-bottom:1px solid var(--rule)}
+.cswitch{display:block;text-decoration:none;padding:7px 9px;border-radius:2px;border:1px solid transparent}
+.cswitch:hover{background:#fff}
+.cswitch.on{background:#fff;border-color:var(--rule)}
+.cs-t{display:block;font-family:var(--display);font-weight:600;font-size:12.5px;color:var(--ink);line-height:1.2}
+.cs-s{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:3px}
+.cswitch.on .cs-t{color:var(--server)}
+
+/* ============ cross-course references ============ */
+.xrefs{display:block;margin-top:9px;display:flex;flex-direction:column;gap:4px}
+.xref{display:block;font-family:var(--mono);font-size:10.5px;line-height:1.5;padding-left:13px;position:relative}
+.xref::before{content:"\2197";position:absolute;left:0;top:0;color:var(--server);font-size:10px}
+.xref a{text-decoration:none;color:var(--client);border-bottom:1px solid rgba(27,79,216,.28)}
+.xref a:hover{border-bottom-color:var(--client)}
+.xr-dead{color:var(--ink-soft)}
+.xr-why{color:var(--ink-soft);margin-left:7px}
+
+.callout.xref-note{border-left-color:var(--server);background:#fff}
+.callout.xref-note .tag{color:var(--server)}
+
+@media (max-width:820px){
+  .libwrap{padding:44px 20px 80px}
+  .ccard{grid-template-columns:1fr;gap:20px;padding:28px 16px;margin-left:-16px}
+  .cc-side{padding-top:0;display:flex;align-items:center;gap:18px}
+  .ring{margin:0}
+}
+@media print{ .cswitchwrap,.liblink{display:none!important} }
+
+/* ============ print ============ */
+@media print{
+  :root{--paper:#fff;--measure:none}
+  body{font-size:11pt}
+  .wire-rail,.sidenav,.chapnav,.chapfoot,.donebar,.chip,.lab .labhead button,.navtoggle{display:none!important}
+  .layout{display:block}
+  .content{padding:0}
+  .demo,.quiz,pre,.callout,table{break-inside:avoid;border-color:#999}
+  a{color:inherit;text-decoration:none}
+  a[href^="http"]::after{content:" (" attr(href) ")";font-size:8pt;color:#666}
+  h2{break-after:avoid}
+  .why{display:block!important}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body class="course-the-wire" data-chapter="11">
+<div class="wire-rail"></div>
+<div class="layout">
+<aside class="sidenav" id="side"></aside>
+<main class="content">
+<nav class="chapnav"></nav>
+
+<header class="masthead">
+  <p class="eyebrow">Part III &nbsp;·&nbsp; Identity and trust &nbsp;·&nbsp; Chapter 11</p>
+  <h1>Revocation and transparency</h1>
+  <p class="lede">A certificate says it is valid until a date. What if that stops being true first? This is the part of PKI that has never really worked, and the story of how the industry stopped trying to fix it and built something different instead.</p>
+</header>
+
+<div class="col">
+
+<h2>11.1 The problem revocation cannot solve</h2>
+
+<p>A private key leaks. A domain changes hands. A CA discovers it misissued. The certificate is still cryptographically valid and still within its validity window, and every client in the world will accept it. You need to tell them not to.</p>
+
+<p>The structural difficulty: <em>the client is talking to the attacker</em>. In the exact scenario where revocation matters most — a machine-in-the-middle holding a stolen key — the attacker controls the network path. Any revocation check that goes over that path can be blocked. And a check that can be blocked must decide what to do on failure:</p>
+
+<ul>
+<li><strong>Hard-fail</strong> — treat an unreachable responder as revoked. Secure, and it means a CA outage takes down every site that CA serves. Nobody ships this by default.</li>
+<li><strong>Soft-fail</strong> — treat an unreachable responder as valid. Available, and trivially defeated: the attacker simply drops the check. This is what almost everything does.</li>
+</ul>
+
+<div class="callout bad">
+  <span class="tag">Adam Langley's verdict, and it still holds</span>
+  <p>Chrome's then-lead on TLS put it plainly in 2012: soft-fail revocation checking is like a seatbelt that snaps in an accident. It works fine except in exactly the circumstance you need it. Chrome subsequently disabled online revocation checks by default, and the fundamental analysis has not changed since — which is why the industry's real answer turned out to be short lifetimes (Ch. 10) rather than better revocation.</p>
+</div>
+
+<h2>11.2 The three mechanisms</h2>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · revocation under attack</span><span id="revstat">Select a mechanism</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>Mechanism</label>
+      <button class="chip on" data-rev="crl">CRL</button>
+      <button class="chip" data-rev="ocsp">OCSP</button>
+      <button class="chip" data-rev="staple">OCSP stapling</button>
+      <button class="chip" data-rev="must">Must-staple</button>
+      <button class="chip" data-rev="short">Short lifetimes</button>
+    </div>
+    <div class="ctl">
+      <label>Attacker</label>
+      <button class="chip" id="atk" aria-pressed="false">Blocks the revocation check</button>
+    </div>
+
+    <svg viewBox="0 0 700 200" role="img" aria-label="Revocation check paths">
+      <defs><style>
+        .rbox{fill:#fff;stroke:#DCDDD4;stroke-width:1.5}
+        .rl{font:700 11px 'Space Grotesk',sans-serif;text-anchor:middle;fill:#14161A}
+        .rs{font:400 9px 'JetBrains Mono',monospace;text-anchor:middle;fill:#4A4F58}
+        .rline{stroke-width:2;fill:none}
+        .rlbl{font:400 9.5px 'JetBrains Mono',monospace;text-anchor:middle}
+      </style>
+      <marker id="ra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+
+      <rect class="rbox" x="20" y="82" width="130" height="52" rx="3"/>
+      <text class="rl" x="85" y="104">Client</text><text class="rs" x="85" y="120">browser</text>
+
+      <rect class="rbox" x="285" y="82" width="130" height="52" rx="3"/>
+      <text class="rl" x="350" y="104">Server</text><text class="rs" x="350" y="120">holds the cert</text>
+
+      <rect class="rbox" x="550" y="82" width="130" height="52" rx="3"/>
+      <text class="rl" x="615" y="104" id="rp-l">CA responder</text><text class="rs" x="615" y="120" id="rp-s">OCSP / CRL</text>
+
+      <g id="rpaths"></g>
+    </svg>
+
+    <div class="out" id="revout" style="margin-top:16px"></div>
+  </div>
+  <div class="demonote">Toggle the attacker on and off against each mechanism. The pattern to notice: every mechanism that requires the client to reach a third party is defeated by an attacker who controls the client's network.</div>
+</div>
+
+<h3>CRL — Certificate Revocation List</h3>
+<p>A signed list of revoked serial numbers, published by the CA and fetched from the URL in the <code>crlDistributionPoints</code> extension. Simple, and it scales badly: lists reached megabytes, must be re-downloaded whole, and are cached for hours or days — so a revocation is not visible until the cache expires. Modern browsers use aggregated, compressed pushes instead (Chrome's CRLSets, Mozilla's CRLite), shipped as part of browser updates rather than fetched per-connection. Those cover only a curated subset, chiefly CA and high-value revocations.</p>
+
+<h3>OCSP — Online Certificate Status Protocol</h3>
+<p>Ask about one certificate rather than downloading everything. Better on bandwidth, worse on nearly everything else: it adds a blocking round trip to a third party before the page loads, it fails soft, and it tells the CA every site every user visits, which is a substantial privacy leak. Let's Encrypt began winding down OCSP entirely in 2025, citing exactly the privacy cost and the operational burden for a control that barely functions.</p>
+
+<h3>OCSP stapling</h3>
+<p>The genuinely good idea. The <em>server</em> periodically fetches its own signed OCSP response and attaches it to the handshake in the <code>status_request</code> extension. The response is signed by the CA and timestamped, so the server cannot forge it or replay an old one indefinitely. No third-party connection from the client, no privacy leak, no extra latency. The remaining flaw: if the server simply omits the staple, most clients shrug and continue.</p>
+
+<h3>Must-staple</h3>
+<p>An extension in the certificate itself declaring that a staple is mandatory. A client seeing it must reject a handshake with no staple, closing the omission gap. It is correct and barely deployed, because it converts a stapling failure into an outage — and stapling failures are common enough that most operators decline the trade.</p>
+
+<h2>11.3 Certificate Transparency</h2>
+
+<p>Revocation answers "is this certificate still valid?" Transparency answers a different and, it turns out, more tractable question: <strong>"was this certificate ever supposed to exist?"</strong></p>
+
+<p>Google proposed CT after DigiNotar. The insight is that you cannot prevent a trusted CA from misissuing, but you can make misissuance <em>impossible to hide</em>. Every certificate must be submitted to public, append-only logs. Domain owners monitor those logs for their own names. A fraudulent certificate is discovered in hours rather than never.</p>
+
+<p>Since 2018 Chrome, and later Safari, require CT proofs for all publicly-trusted certificates. In practice this means a certificate that is not logged is not usable on the web.</p>
+
+<h3>The append-only guarantee</h3>
+<p>A log is only useful if it cannot rewrite history. CT logs are <strong>Merkle trees</strong>: leaves are hashed certificates, each internal node is the hash of its two children, and the root hash commits to every leaf. Change any certificate and the root changes. Two proofs make the guarantee checkable:</p>
+<ul>
+<li><strong>Inclusion proof</strong> — <em>this certificate is in the log with this root.</em> Requires only log₂(n) hashes, not the whole log.</li>
+<li><strong>Consistency proof</strong> — <em>this newer root contains everything the older root did, with items only appended.</em> This is what makes the log append-only in a verifiable way.</li>
+</ul>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · Merkle inclusion proof</span><span id="mstat">8 certificates logged</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>Prove inclusion of</label>
+      <span id="leafchips"></span>
+      <button class="chip" id="tamper" aria-pressed="false">Tamper with cert 3</button>
+    </div>
+    <svg id="mtree" viewBox="0 0 700 240" role="img" aria-label="Merkle tree with inclusion proof path"></svg>
+    <div class="out" id="mout" style="margin-top:14px"></div>
+  </div>
+  <div class="demonote">The audit path is highlighted: those are the only hashes a verifier needs. For a log holding a billion certificates, an inclusion proof is about 30 hashes — roughly a kilobyte — which is why this scales where downloading a revocation list does not.</div>
+</div>
+
+<h3>SCTs and the precertificate trick</h3>
+<p>When a CA submits a certificate, the log returns a <strong>Signed Certificate Timestamp</strong> — a signed promise to include it within a stated Maximum Merge Delay, usually 24 hours. Clients check SCTs, typically requiring two or three from independent logs.</p>
+
+<p>There is a chicken-and-egg problem: the SCT should be embedded <em>in</em> the certificate, but the certificate must exist before it can be logged. The solution is the <strong>precertificate</strong> — a copy carrying a special critical "poison" extension that makes it unusable for TLS. The CA logs the precertificate, receives SCTs, then issues the real certificate with those SCTs embedded and the poison removed. The poison extension being critical is what guarantees no client will ever accept the precertificate itself (Ch. 9's criticality flag doing real work).</p>
+
+<div class="callout">
+  <span class="tag">CT as an operational tool</span>
+  <p>This is the most immediately useful thing in the chapter. Because every certificate for your domains is public, you can enumerate them — including ones issued by teams you did not know were issuing, and ones from a CA you never authorised. Set up monitoring on <code>crt.sh</code> or a CT monitoring service for your domains and you get free asset discovery plus misissuance alerting. It is also worth knowing the flip side: <strong>CT leaks internal hostnames</strong>. A certificate for <code>jenkins-staging.internal.example.com</code> is published to the world. Use a wildcard, or a private CA, for names you would rather not advertise.</p>
+</div>
+
+<h2>11.4 What actually protects you</h2>
+
+<p>Ranked by how much they matter in practice, which is not the order they are usually taught:</p>
+
+<table>
+<thead><tr><th>Control</th><th>Effectiveness</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><strong>Short lifetimes</strong></td><td>High</td><td>Needs no network call, cannot be soft-failed or blocked. This is the real answer.</td></tr>
+<tr><td><strong>Certificate Transparency</strong></td><td>High</td><td>Detects misissuance reliably; required by major browsers; enables monitoring.</td></tr>
+<tr><td><strong>CRLSets / CRLite</strong></td><td>Moderate</td><td>Pushed with browser updates, so not blockable — but covers a curated subset only.</td></tr>
+<tr><td><strong>OCSP stapling</strong></td><td>Moderate</td><td>Correct design, undermined by soft-fail on a missing staple.</td></tr>
+<tr><td><strong>Must-staple</strong></td><td>High where deployed</td><td>Closes the gap. Barely deployed, because failures become outages.</td></tr>
+<tr><td><strong>Client-side OCSP</strong></td><td>Low</td><td>Soft-fails, leaks browsing history, adds latency. Being retired.</td></tr>
+<tr><td><strong>CRL fetched by clients</strong></td><td>Very low</td><td>Stale, large, soft-fails. Effectively dead on the public web.</td></tr>
+</tbody>
+</table>
+
+<p>The honest summary of Part III: the internet largely gave up on telling clients that a certificate went bad, and instead arranged for certificates to stop being valid so quickly that it rarely matters — while making issuance public so that abuse is caught. Both are engineering responses to the same admission: you cannot rely on reaching a third party over a network the attacker controls.</p>
+
+<h2>11.5 Lab</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · revocation and CT in practice</span><button data-copy>Copy</button></div>
+<pre><code># Does this server staple an OCSP response?
+openssl s_client -connect example.com:443 -status &lt;/dev/null 2&gt;/dev/null \
+  | sed -n '/OCSP response/,/Next Update/p'
+#   "OCSP Response Status: successful" plus This/Next Update = stapling works.
+#   "no response sent by server" = not stapling.
+
+# Query an OCSP responder manually
+openssl s_client -connect example.com:443 -showcerts &lt;/dev/null 2&gt;/dev/null \
+  | awk '/BEGIN CERT/{n++} n==1' > leaf.pem
+openssl s_client -connect example.com:443 -showcerts &lt;/dev/null 2&gt;/dev/null \
+  | awk '/BEGIN CERT/{n++} n==2' > issuer.pem
+
+OCSP_URL=$(openssl x509 -in leaf.pem -noout -ocsp_uri)
+echo "responder: $OCSP_URL"
+openssl ocsp -issuer issuer.pem -cert leaf.pem -url "$OCSP_URL" \
+  -header "Host=$(echo $OCSP_URL | cut -d/ -f3)" -no_nonce -text 2>/dev/null | head -25
+#   Note what just happened: you told the CA which site you are visiting.
+#   Every browser doing this leaks the same thing. That is why OCSP is being retired.
+
+# Where would a CRL come from, and how big is it?
+openssl x509 -in leaf.pem -noout -ext crlDistributionPoints
+CRL=$(openssl x509 -in leaf.pem -noout -ext crlDistributionPoints | grep -o 'http[^ ]*')
+curl -s -o crl.der -w "CRL size: %{size_download} bytes\n" "$CRL" 2>/dev/null
+openssl crl -in crl.der -inform DER -noout -text 2>/dev/null | head -12
+
+# Is must-staple set? (OID 1.3.6.1.5.5.7.1.24)
+openssl x509 -in leaf.pem -noout -text | grep -A1 '1.3.6.1.5.5.7.1.24' \
+  || echo "no must-staple (this is the common case)"
+
+# Certificate Transparency: the embedded SCTs
+openssl x509 -in leaf.pem -noout -text | grep -A12 'CT Precertificate SCTs'
+
+# Every certificate ever issued for your domain \u2014 run this on your own domains
+curl -s 'https://crt.sh/?q=%25.example.com&output=json' \
+  | python3 -c "
+import sys, json
+rows = json.load(sys.stdin)
+print(f'{len(rows)} certificates found')
+for r in rows[:20]:
+    print(r['not_before'][:10], '|', r['issuer_name'][:38], '|', r['name_value'].replace(chr(10), ' ')[:50])"
+#   Look for: CAs you did not authorise, internal hostnames you did not mean
+#   to publish, and certificates nobody on your team remembers requesting.</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Why is soft-fail revocation checking described as ineffective?</p>
+    <div class="opts">
+      <button class="opt">The responses are not signed, so they can be forged</button>
+      <button class="opt">Responders are too slow to be queried in time</button>
+      <button class="opt">CRLs are cached too long to be current</button>
+      <button class="opt">An attacker holding a stolen key already controls the network path, so they simply block the check and the client proceeds</button>
+    </div>
+    <p class="why">The failure is structural, not implementational. In precisely the scenario revocation exists for — a machine-in-the-middle with a compromised key — the attacker controls the path to the responder. Soft-fail means blocking the check is as good as a valid response. Hard-fail would fix it and makes every CA outage a global outage, so nobody ships it.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">What advantage does OCSP stapling have over client-queried OCSP?</p>
+    <div class="opts">
+      <button class="opt">The response does not need to be signed by the CA</button>
+      <button class="opt">The client makes no third-party connection, so there is no added latency and no browsing-history leak to the CA</button>
+      <button class="opt">It cannot be omitted by the server</button>
+      <button class="opt">It works even if the certificate has expired</button>
+    </div>
+    <p class="why">The server fetches its own status and attaches it to the handshake. The response is still CA-signed and timestamped, so the server cannot forge or indefinitely replay it. What stapling does <em>not</em> fix is omission — that requires must-staple.</p>
+  </div>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">What does a Merkle inclusion proof demonstrate?</p>
+    <div class="opts">
+      <button class="opt">That the certificate has not been revoked</button>
+      <button class="opt">That the CA was authorised to issue it</button>
+      <button class="opt">That this certificate is present in a log with a given root hash, verifiable from about log₂(n) hashes</button>
+      <button class="opt">That the log contains no fraudulent certificates</button>
+    </div>
+    <p class="why">Inclusion is all it proves. Whether the certificate <em>should</em> exist is a judgement made by the domain owner monitoring the log. The efficiency is the point: a proof against a billion-entry log is roughly 30 hashes, which is why this scales where fetching a revocation list does not.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">Why does a CA log a precertificate rather than the final certificate?</p>
+    <div class="opts">
+      <button class="opt">SCTs must be embedded in the certificate, but cannot exist until it has been logged — the precertificate breaks the circularity and is made unusable by a critical poison extension</button>
+      <button class="opt">Precertificates are smaller and cheaper to log</button>
+      <button class="opt">The final certificate must stay private until deployment</button>
+      <button class="opt">Logs cannot accept certificates with SCTs already embedded</button>
+    </div>
+    <p class="why">Embedding an SCT changes the certificate, which would change what was logged. The precertificate is logged first, SCTs come back, and the real certificate is issued with them included. The poison extension is marked <em>critical</em> so that no client will ever accept the precertificate for TLS — Chapter 9's criticality mechanism doing exactly the job it was designed for.</p>
+  </div>
+</div>
+
+<h2>11.6 Part III in one page</h2>
+<table>
+<thead><tr><th>Question</th><th>Answered by</th><th>How well</th></tr></thead>
+<tbody>
+<tr><td>Whose key is this?</td><td>The certificate chain (Ch. 8)</td><td>Well, given the trust store</td></tr>
+<tr><td>Who vouches for it?</td><td>A CA in your trust store</td><td>~150 organisations, any of which can issue for anyone</td></tr>
+<tr><td>What exactly does it claim?</td><td>X.509 fields, chiefly SAN (Ch. 9)</td><td>Precisely, if you check every field</td></tr>
+<tr><td>What was verified before signing?</td><td>Domain control, usually (Ch. 10)</td><td>Only that. Nothing about the operator's honesty.</td></tr>
+<tr><td>Is it still valid?</td><td>Revocation</td><td><strong>Poorly.</strong> Short lifetimes are the real answer.</td></tr>
+<tr><td>Should it exist at all?</td><td>Certificate Transparency</td><td>Well, and improving</td></tr>
+</tbody>
+</table>
+
+<p>We now have every piece: primitives that provide confidentiality, integrity, key agreement and signatures, and a system that binds keys to names. Part IV assembles them into the protocol that runs on it — and finally answers the question Chapter 6 left open, by watching the server sign a transcript that only the holder of a certified key could produce.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
+</main>
+</div>
+
+<script>
+/* ---------- revocation paths ---------- */
+(function(){
+  var NS='http://www.w3.org/2000/svg', rev='crl', atk=false;
+
+  var R = {
+    crl: { pl:'CA CRL endpoint', ps:'crl.ca.example', client3rd:true,
+      ok:'<strong>CRL.</strong> The client downloads the CA\u2019s full signed list of revoked serial numbers from the URL in the certificate, then searches it. Lists have reached megabytes, are re-fetched whole, and are cached for hours or days \u2014 so a revocation issued this morning may not be visible to a client until tomorrow. Simple, honest, and it does not scale.',
+      bad:'<strong>CRL, blocked.</strong> The attacker drops traffic to the CRL endpoint. The client cannot fetch the list, soft-fails, and proceeds \u2014 accepting the revoked certificate. Even without an attacker, the cached copy from before the revocation would have said the same thing.' },
+    ocsp: { pl:'OCSP responder', ps:'ocsp.ca.example', client3rd:true,
+      ok:'<strong>OCSP.</strong> The client asks about this one certificate by serial number and gets a small signed answer. Much lighter than a CRL, and it introduces two new costs: a blocking round trip to a third party before the page renders, and a privacy leak \u2014 you have just told the CA which site you are visiting. Let\u2019s Encrypt began retiring OCSP in 2025 for exactly these reasons.',
+      bad:'<strong>OCSP, blocked.</strong> Identical outcome to CRL. The responder is unreachable, the client soft-fails, the revoked certificate is accepted. Hard-failing instead would mean any CA responder outage takes down every site that CA serves, which is why no mainstream browser does it.' },
+    staple: { pl:'CA responder', ps:'server fetches, not client', client3rd:false,
+      ok:'<strong>OCSP stapling.</strong> The <em>server</em> fetches its own status periodically and attaches the signed, timestamped response to the handshake in the status_request extension. The client makes no third-party connection: no added latency, no privacy leak, and nothing for a network attacker to block. The response is CA-signed with a validity window, so the server can neither forge one nor replay an old one indefinitely.',
+      bad:'<strong>Stapling, staple omitted.</strong> The attacker\u2019s server simply does not include a staple. Most clients treat a missing staple as "unknown" and continue \u2014 so the correct design is defeated by the absence of a requirement to use it. That is the gap must-staple closes.' },
+    must: { pl:'CA responder', ps:'staple is mandatory', client3rd:false,
+      ok:'<strong>Must-staple.</strong> The certificate itself carries the TLS Feature extension declaring a staple is required. A conforming client that receives no staple <em>rejects the handshake</em>. This genuinely works. It is barely deployed, because it converts every stapling failure \u2014 a CA responder blip, a misconfigured reload \u2014 into a hard outage, and operators consistently decline that trade.',
+      bad:'<strong>Must-staple, staple omitted.</strong> <span style="color:#0B8A5B">The connection is refused.</span> The client knows a staple was mandatory, none arrived, and it declines to proceed rather than guessing. This is the one mechanism on this list that survives an attacker who controls the network.' },
+    short: { pl:'no responder needed', ps:'expiry does the work', client3rd:false,
+      ok:'<strong>Short lifetimes.</strong> No network call, no third party, nothing to block or soft-fail. The client compares two dates against its own clock. A key compromised today is worthless within weeks \u2014 or within hours for service mesh certificates. This is why public lifetimes are dropping to 47 days by 2029, and it is the industry\u2019s actual answer to revocation.',
+      bad:'<strong>Short lifetimes, attacker present.</strong> <span style="color:#0B8A5B">Nothing changes.</span> There is no check to block, because validity is a property of the certificate itself rather than a question asked of a server. The stolen certificate works until it expires, and then stops \u2014 no cooperation from anyone required. Not perfect, and unblockable, which beats a perfect mechanism that fails open.' }
+  };
+
+  function draw(){
+    var r = R[rev], g = document.getElementById('rpaths');
+    g.innerHTML = '';
+    document.getElementById('rp-l').textContent = r.pl;
+    document.getElementById('rp-s').textContent = r.ps;
+
+    function line(x1,y1,x2,y2,col,dash){
+      var l=document.createElementNS(NS,'line');
+      l.setAttribute('x1',x1);l.setAttribute('y1',y1);l.setAttribute('x2',x2);l.setAttribute('y2',y2);
+      l.setAttribute('stroke',col);l.setAttribute('stroke-width','2');
+      l.setAttribute('marker-end','url(#ra)');l.setAttribute('color',col);
+      if(dash) l.setAttribute('stroke-dasharray','5 4');
+      g.appendChild(l);
+    }
+    function lbl(x,y,t,col){
+      var e=document.createElementNS(NS,'text');
+      e.setAttribute('class','rlbl');e.setAttribute('x',x);e.setAttribute('y',y);
+      e.setAttribute('fill',col);e.textContent=t;g.appendChild(e);
+    }
+
+    // client <-> server always
+    line(152,108,283,108,'#1B4FD8');
+    lbl(217,100,'TLS','#1B4FD8');
+
+    if(rev==='short'){
+      lbl(615,160,'not contacted','#4A4F58');
+      lbl(217,132,'dates checked locally','#0B8A5B');
+    } else if(r.client3rd){
+      var blocked = atk;
+      line(85,80,85,44,blocked?'#C1121F':'#0B8A5B');
+      line(85,44,548,44,blocked?'#C1121F':'#0B8A5B');
+      if(!blocked) line(548,44,615,80,'#0B8A5B');
+      lbl(310,36, blocked?'BLOCKED BY ATTACKER':'client queries responder', blocked?'#C1121F':'#0B8A5B');
+      if(blocked) lbl(560,60,'\u2717','#C1121F');
+    } else {
+      var omitted = atk;
+      line(415,108,548,108, omitted?'#C1121F':'#0B8A5B', omitted);
+      lbl(482,100, omitted?'no staple':'server fetches', omitted?'#C1121F':'#0B8A5B');
+      lbl(217,132, omitted ? (rev==='must'?'handshake REFUSED':'accepted anyway') : 'staple attached', omitted ? (rev==='must'?'#0B8A5B':'#C1121F') : '#0B8A5B');
+    }
+
+    var out = atk ? r.bad : r.ok;
+    document.getElementById('revout').innerHTML = out;
+    var safe = !atk || rev==='must' || rev==='short';
+    document.getElementById('revstat').textContent = atk ? (safe?'Attack fails':'Attack succeeds') : 'No attacker';
+    document.getElementById('revstat').style.color = atk ? (safe?'#0B8A5B':'#C1121F') : '#4A4F58';
+  }
+
+  document.querySelectorAll('[data-rev]').forEach(function(b){
+    b.addEventListener('click',function(){
+      rev=b.dataset.rev;
+      document.querySelectorAll('[data-rev]').forEach(function(x){x.classList.toggle('on',x===b);});
+      draw();
+    });
+  });
+  document.getElementById('atk').addEventListener('click',function(){
+    atk=!atk; this.setAttribute('aria-pressed',atk);
+    this.textContent = atk ? 'Attacker active \u2014 click to remove' : 'Blocks the revocation check';
+    draw();
+  });
+  draw();
+})();
+
+/* ---------- Merkle tree ---------- */
+(function(){
+  var NS='http://www.w3.org/2000/svg', sel=0, tampered=false;
+
+  function h(s){ // tiny display hash — deterministic, not cryptographic
+    var x=2166136261>>>0;
+    for(var i=0;i<s.length;i++){ x^=s.charCodeAt(i); x=Math.imul(x,16777619)>>>0; }
+    return ('00000000'+x.toString(16)).slice(-8);
+  }
+
+  var chipwrap = document.getElementById('leafchips');
+  for(var i=0;i<8;i++){
+    var b=document.createElement('button');
+    b.className='chip'+(i===0?' on':''); b.textContent='cert '+i; b.dataset.leaf=i;
+    chipwrap.appendChild(b);
+  }
+
+  function build(){
+    var leaves=[];
+    for(var i=0;i<8;i++){
+      var content = 'cert-'+i + (tampered && i===3 ? '-ALTERED' : '');
+      leaves.push(h(content));
+    }
+    var lv=[leaves];
+    while(lv[lv.length-1].length>1){
+      var prev=lv[lv.length-1], next=[];
+      for(var j=0;j<prev.length;j+=2) next.push(h(prev[j]+prev[j+1]));
+      lv.push(next);
+    }
+    return lv;
+  }
+
+  function render(){
+    var lv=build(), svg=document.getElementById('mtree');
+    svg.innerHTML='';
+    var W=700, rowY=[200,150,100,46];
+
+    // audit path: sibling at each level
+    var idx=sel, path=[];
+    for(var l=0;l<3;l++){ path.push([l, idx^1]); idx=idx>>1; }
+    var onPath = {}; path.forEach(function(p){ onPath[p[0]+':'+p[1]]=1; });
+    var upIdx=sel, up={};
+    for(var l2=0;l2<4;l2++){ up[l2+':'+upIdx]=1; upIdx=upIdx>>1; }
+
+    lv.forEach(function(row,l){
+      var n=row.length, gap=W/n;
+      row.forEach(function(hash,i){
+        var x=gap*i+gap/2, y=rowY[l];
+        var isUp = up[l+':'+i], isPath = onPath[l+':'+i];
+        var w = l===0?72:88;
+        var r=document.createElementNS(NS,'rect');
+        r.setAttribute('x',x-w/2); r.setAttribute('y',y-13);
+        r.setAttribute('width',w); r.setAttribute('height',24); r.setAttribute('rx',2);
+        r.setAttribute('fill', isPath?'#FFF0A8': isUp?'#F4F7FF':'#fff');
+        r.setAttribute('stroke', isUp?'#1B4FD8': isPath?'#E8A317':'#DCDDD4');
+        r.setAttribute('stroke-width', isUp||isPath?2:1);
+        svg.appendChild(r);
+
+        var t=document.createElementNS(NS,'text');
+        t.setAttribute('x',x); t.setAttribute('y',y+4);
+        t.setAttribute('text-anchor','middle');
+        t.setAttribute('font-family',"'JetBrains Mono',monospace");
+        t.setAttribute('font-size', l===0?'8.5':'9.5');
+        t.setAttribute('fill', tampered && l===0 && i===3 ? '#C1121F' : '#14161A');
+        t.textContent = hash;
+        svg.appendChild(t);
+
+        if(l===0){
+          var c=document.createElementNS(NS,'text');
+          c.setAttribute('x',x); c.setAttribute('y',y+24);
+          c.setAttribute('text-anchor','middle');
+          c.setAttribute('font-family',"'JetBrains Mono',monospace");
+          c.setAttribute('font-size','8'); c.setAttribute('fill','#4A4F58');
+          c.textContent='cert '+i; svg.appendChild(c);
+        }
+        if(l<3){
+          var pg=W/(lv[l+1].length), px=pg*(i>>1)+pg/2;
+          var ln=document.createElementNS(NS,'line');
+          ln.setAttribute('x1',x); ln.setAttribute('y1',y-13);
+          ln.setAttribute('x2',px); ln.setAttribute('y2',rowY[l+1]+11);
+          ln.setAttribute('stroke', isUp?'#1B4FD8':'#DCDDD4');
+          ln.setAttribute('stroke-width', isUp?2:1);
+          svg.appendChild(ln);
+        }
+      });
+    });
+
+    var lbl=document.createElementNS(NS,'text');
+    lbl.setAttribute('x',8); lbl.setAttribute('y',24);
+    lbl.setAttribute('font-family',"'JetBrains Mono',monospace");
+    lbl.setAttribute('font-size','9.5'); lbl.setAttribute('fill','#4A4F58');
+    lbl.setAttribute('letter-spacing','.12em');
+    lbl.textContent='ROOT HASH \u2014 signed by the log'; svg.appendChild(lbl);
+
+    var root = lv[3][0];
+    var proof = path.map(function(p){ return lv[p[0]][p[1]]; });
+    document.getElementById('mstat').textContent = 'root ' + root;
+
+    document.getElementById('mout').innerHTML =
+      '<strong>Inclusion proof for cert ' + sel + '</strong><br><br>' +
+      '<span style="color:#1B4FD8">Blue path</span> is what the verifier recomputes; ' +
+      '<span style="background:#FFF0A8">highlighted</span> nodes are the audit path \u2014 the only hashes the log has to send.<br><br>' +
+      'proof = [ ' + proof.join(', ') + ' ]<br>' +
+      'recomputed root = <strong>' + root + '</strong><br><br>' +
+      (tampered
+        ? '<span style="color:#C1121F">Cert 3 was altered.</span> Its leaf hash changed, so every node above it changed, so the root changed. ' +
+          'The log previously published and signed the old root, and clients hold signed roots from earlier observations. ' +
+          'A consistency proof between the old root and this one would fail, exposing the log as having rewritten history. ' +
+          'This is the entire append-only guarantee: not that tampering is prevented, but that it cannot be hidden.' +
+          (sel===3 ? '<br><br>Note the proof for cert 3 itself now yields a root nobody signed \u2014 the SCT for the original certificate no longer verifies.' : '')
+        : 'The verifier hashes cert ' + sel + ', combines it with each audit-path hash in turn, and arrives at the root. ' +
+          'If that matches the root the log signed, the certificate is in the log \u2014 proved with 3 hashes here, and about 30 for a log holding a billion entries. ' +
+          'That logarithmic cost is why transparency scales where downloading revocation lists does not.');
+  }
+
+  chipwrap.addEventListener('click',function(e){
+    var b=e.target.closest('[data-leaf]'); if(!b) return;
+    sel=+b.dataset.leaf;
+    chipwrap.querySelectorAll('.chip').forEach(function(x){ x.classList.toggle('on',x===b); });
+    render();
+  });
+  document.getElementById('tamper').addEventListener('click',function(){
+    tampered=!tampered; this.setAttribute('aria-pressed',tampered);
+    this.textContent = tampered ? 'Restore cert 3' : 'Tamper with cert 3';
+    render();
+  });
+  render();
+})();
+</script>
+
+<script>
+/* ============================================================
+   The library manifest: every course, every chapter.
+   Add a chapter here and it appears in the side nav, the course
+   landing page, search, progress and prev/next navigation.
+
+   xref: [{course, n, why}]  declares a cross-course link.
+   ============================================================ */
+window.LIBRARY = {
+  title: "Field Notes",
+  tagline: "Interactive courses on the systems underneath everything.",
+
+  courses: [
+    /* ---------------------------------------------------------- */
+    {
+      id: "the-wire",
+      slug: "the-wire",
+      title: "The Wire",
+      subtitle: "Security \u00B7 Crypto \u00B7 TLS",
+      hero: "Everything between saying it and being believed",
+      blurb: "Computer security, cryptography, certificates and TLS, taught in dependency order. Each chapter's answer becomes the next chapter's question.",
+      parts: [
+        { id:"I",   name:"Foundations",              range:[1,2] },
+        { id:"II",  name:"Cryptographic primitives", range:[3,7] },
+        { id:"III", name:"Identity and trust",       range:[8,11] },
+        { id:"IV",  name:"TLS on the wire",          range:[12,17] },
+        { id:"V",   name:"Applied and operational",  range:[18,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-what-security-means.html", title:"What security actually means",
+          desc:"CIA triad, threat models, attacker capability classes, trust boundaries, defence in depth.",
+          keys:"cia confidentiality integrity availability threat model dolev-yao trust boundary kerckhoffs" },
+        { n:2, file:"02-adversary-toolkit.html", title:"The adversary's toolkit",
+          desc:"Where an attacker can stand and what that position buys them. Passive, active, MITM, replay, downgrade.",
+          keys:"mitm eavesdrop replay downgrade arp spoofing bgp hijack rogue ap side channel" },
+        { n:3, file:"03-hashing-integrity.html", title:"Hashing and integrity",
+          desc:"Preimage and collision resistance, SHA-2/3, the avalanche effect, HMAC, length extension.",
+          keys:"hash sha256 sha3 md5 collision preimage avalanche hmac length extension argon2" },
+        { n:4, file:"04-symmetric-encryption.html", title:"Symmetric encryption",
+          desc:"AES internals, block vs stream, ECB/CBC/CTR/GCM, IVs and nonces, AEAD and why it exists.",
+          keys:"aes symmetric block cipher ecb cbc ctr gcm chacha20 poly1305 aead iv nonce padding oracle" },
+        { n:5, file:"05-asymmetric-encryption.html", title:"Asymmetric encryption",
+          desc:"RSA and elliptic curves, what each half of a key pair can do, OAEP, key sizes that matter.",
+          keys:"rsa public key private key ecc elliptic curve p256 x25519 oaep modulus trapdoor" },
+        { n:6, file:"06-key-exchange.html", title:"Key exchange",
+          desc:"Diffie-Hellman step by step, ECDHE, forward secrecy, and why static RSA key transport died.",
+          keys:"diffie hellman dh ecdhe forward secrecy pfs shared secret discrete log x25519 logjam" },
+        { n:7, file:"07-digital-signatures.html", title:"Digital signatures",
+          desc:"Signing is not backwards encryption. RSA-PSS, ECDSA, Ed25519, and what a signature proves.",
+          keys:"signature sign verify rsa-pss ecdsa ed25519 nonce reuse non-repudiation" },
+        { n:8, file:"08-pki-trust-model.html", title:"The PKI trust model",
+          desc:"Why cryptography alone proves nothing about identity. Roots, intermediates, leaves, path building.",
+          keys:"pki root ca intermediate leaf chain of trust trust store path building cross-signing" },
+        { n:9, file:"09-inside-x509.html", title:"Inside an X.509 certificate",
+          desc:"Every field, byte by byte. DER and ASN.1, SAN vs CN, extensions, key usage, basic constraints.",
+          keys:"x509 asn1 der pem san cn extensions key usage basic constraints serial issuer subject" },
+        { n:10, file:"10-certificate-lifecycle.html", title:"Certificate lifecycle",
+          desc:"CSR to issuance to renewal. DV/OV/EV, ACME and Let's Encrypt, CAA records, private CAs.",
+          keys:"csr acme lets encrypt dv ov ev caa renewal cert-manager private ca issuance",
+          xref:[{course:"kubernetes", n:12, why:"cert-manager and ingress TLS in practice"}] },
+        { n:11, file:"11-revocation-transparency.html", title:"Revocation and transparency",
+          desc:"CRL, OCSP, stapling, must-staple, and Certificate Transparency logs and SCTs.",
+          keys:"crl ocsp stapling must-staple certificate transparency ct log sct revocation merkle" },
+        { n:12, file:"12-tls12-handshake.html", title:"The TLS 1.2 handshake",
+          desc:"Every message in order, with real bytes. ClientHello through Finished, and why each exists.",
+          keys:"tls 1.2 handshake clienthello serverhello certificate serverkeyexchange finished prf" },
+        { n:13, file:"13-tls13-handshake.html", title:"The TLS 1.3 handshake",
+          desc:"1-RTT and 0-RTT, the HKDF key schedule, and everything RFC 8446 deleted on purpose.",
+          keys:"tls 1.3 rfc8446 1-rtt 0-rtt early data hkdf key schedule helloretryrequest" },
+        { n:14, file:"14-cipher-suites.html", title:"Cipher suites decoded",
+          desc:"Reading a suite string, negotiation rules, ALPN, SNI, and Encrypted Client Hello.",
+          keys:"cipher suite negotiation alpn sni ech esni grease tls_aes_128_gcm_sha256" },
+        { n:15, file:"15-after-the-handshake.html", title:"After the handshake",
+          desc:"The record layer, sequence numbers, session resumption and tickets, rekeying, close_notify.",
+          keys:"record layer session resumption ticket psk rekey key update close_notify" },
+        { n:16, file:"16-mtls.html", title:"Mutual TLS",
+          desc:"Client certificates end to end: CertificateRequest, verification, and where mTLS belongs.",
+          keys:"mtls mutual tls client certificate certificaterequest certificateverify spiffe",
+          xref:[{course:"kubernetes", n:10, why:"service mesh mTLS between pods"}] },
+        { n:17, file:"17-when-tls-breaks.html", title:"When TLS breaks",
+          desc:"Decoding real errors, plus BEAST, CRIME, POODLE, Heartbleed, Logjam and downgrade attacks.",
+          keys:"error expired self-signed hostname mismatch unknown_ca beast crime poodle heartbleed" },
+        { n:18, file:"18-web-app-security.html", title:"Web application security",
+          desc:"OWASP Top 10 in practice: XSS, CSRF, SQLi, SSRF, plus HSTS, CSP, CORS and cookie flags.",
+          keys:"owasp xss csrf sqli ssrf hsts csp cors samesite httponly subresource integrity" },
+        { n:19, file:"19-authn-authz.html", title:"Authentication and authorization",
+          desc:"Password storage, MFA, sessions vs tokens, JWT pitfalls, OAuth 2.0, OIDC and SAML.",
+          keys:"authentication authorization argon2 bcrypt mfa totp webauthn passkey jwt oauth oidc saml rbac",
+          xref:[{course:"kubernetes", n:20, why:"how RBAC and bound service account tokens apply this"}] },
+        { n:20, file:"20-network-security.html", title:"Network security",
+          desc:"TCP/IP and where security attaches, firewalls, IPsec and WireGuard, DNSSEC, DoH/DoT, Zero Trust.",
+          keys:"tcp ip firewall vpn ipsec wireguard dns dnssec doh dot zero trust segmentation",
+          xref:[{course:"linux", n:15, why:"netfilter hooks and conntrack, where the rules actually run"}] },
+        { n:21, file:"21-secrets-key-management.html", title:"Secrets and key management",
+          desc:"HSMs, KMS, envelope encryption, rotation strategy, and keeping secrets out of CI/CD.",
+          keys:"hsm kms envelope encryption dek kek rotation vault sealed secrets secret scanning",
+          xref:[{course:"kubernetes", n:17, why:"why Kubernetes Secrets are not secret"}] },
+        { n:22, file:"22-cloud-kubernetes.html", title:"Security in cloud and Kubernetes",
+          desc:"TLS at ingress, service mesh mTLS, cert-manager, workload identity, network policy, pod hardening.",
+          keys:"kubernetes ingress service mesh istio linkerd cert-manager workload identity network policy",
+          xref:[{course:"kubernetes", n:13, why:"how network policy is actually enforced"},
+                {course:"linux", n:11, why:"capabilities, seccomp and LSMs underneath pod security"}] },
+        { n:23, file:"23-post-quantum.html", title:"Post-quantum and what comes next",
+          desc:"Shor and Grover, ML-KEM and ML-DSA, hybrid key exchange, harvest-now-decrypt-later.",
+          keys:"post quantum shor grover ml-kem kyber ml-dsa dilithium hybrid harvest now decrypt later" },
+        { n:24, file:"24-putting-it-together.html", title:"Putting it all together",
+          desc:"Capstone: one HTTPS request from keystroke to rendered page, every layer visible at once.",
+          keys:"capstone end to end https request dns tcp tls http rendering full path" }
+      ],
+      appendix: [
+        { file:"appendix-glossary.html", title:"Glossary", desc:"Every term used in the course, defined once.", soon:true },
+        { file:"appendix-openssl.html", title:"OpenSSL cheat sheet", desc:"The commands worth memorising, grouped by task.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "kubernetes",
+      slug: "kubernetes",
+      title: "Inside Out",
+      subtitle: "Kubernetes internals",
+      hero: "What actually happens when you type kubectl apply",
+      blurb: "Kubernetes as a set of cooperating control loops rather than a pile of YAML. Vendor-neutral throughout, from the API server request path to a packet reaching your pod.",
+      parts: [
+        { id:"I",   name:"The model",              range:[1,4] },
+        { id:"II",  name:"Scheduling and lifecycle", range:[5,8] },
+        { id:"III", name:"Networking",             range:[9,13] },
+        { id:"IV",  name:"Storage and state",      range:[14,15] },
+        { id:"V",   name:"Workloads",              range:[16,19] },
+        { id:"VI",  name:"Operating it",           range:[20,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-declarative-reconciliation.html", title:"Declarative reconciliation", soon:true,
+          desc:"Desired state, observed state, and the control loop that closes the gap. The one idea the rest of the system is built from.",
+          keys:"declarative imperative reconciliation control loop desired state observed state level triggered idempotent" },
+        { n:2, file:"02-api-server.html", title:"The API server", soon:true,
+          desc:"Groups, versions and kinds, spec and status, and the full request path: authentication, authorization, admission, validation, storage.",
+          keys:"api server gvk gvr spec status request path authentication authorization admission validation openapi",
+          xref:[{course:"the-wire", n:16, why:"the mTLS that authenticates every component to the API server"}] },
+        { n:3, file:"03-etcd.html", title:"etcd", soon:true,
+          desc:"Raft consensus, the revision model, watches, leases and compaction. Why cluster state is a single consistent log.",
+          keys:"etcd raft consensus quorum revision watch lease compaction defrag backup restore" },
+        { n:4, file:"04-controllers-informers.html", title:"Controllers and informers", soon:true,
+          desc:"The shared informer cache, work queues, resync, and why level-triggered logic survives missed events.",
+          keys:"controller informer lister workqueue resync level triggered edge triggered controller-runtime" },
+        { n:5, file:"05-scheduler.html", title:"The scheduler", soon:true,
+          desc:"Filter and score, node affinity, taints and tolerations, topology spread, and preemption.",
+          keys:"scheduler filter score predicate priority affinity anti-affinity taint toleration topology spread preemption" },
+        { n:6, file:"06-pod-lifecycle.html", title:"Pod lifecycle", soon:true,
+          desc:"Phases and conditions, init and sidecar containers, the three probe types, and graceful termination.",
+          keys:"pod lifecycle phase condition init container sidecar liveness readiness startup probe prestop sigterm grace period",
+          xref:[{course:"linux", n:13, why:"what SIGTERM and SIGKILL actually do to a process"}] },
+        { n:7, file:"07-kubelet.html", title:"The kubelet", soon:true,
+          desc:"The node agent's sync loop, PLEG, node status and heartbeats, and eviction under pressure.",
+          keys:"kubelet sync loop pleg node status heartbeat lease eviction pressure static pod cadvisor" },
+        { n:8, file:"08-container-runtime.html", title:"Container runtimes", soon:true,
+          desc:"CRI, containerd and runc, the OCI image and runtime specs, image pull and snapshotters.",
+          keys:"cri containerd runc oci image spec runtime spec snapshotter overlayfs registry pull",
+          xref:[{course:"linux", n:12, why:"build the same isolation by hand in fifty lines"}] },
+        { n:9, file:"09-network-model.html", title:"The network model", soon:true,
+          desc:"The flat addressing rules every CNI must satisfy, pod-to-pod paths, overlays versus native routing.",
+          keys:"cni network model flat addressing pod cidr overlay vxlan native routing veth bridge" },
+        { n:10, file:"10-services-kube-proxy.html", title:"Services and kube-proxy", soon:true,
+          desc:"ClusterIP as a fiction maintained by rules. iptables versus IPVS, EndpointSlices, session affinity.",
+          keys:"service clusterip nodeport loadbalancer kube-proxy iptables ipvs endpointslice dnat session affinity",
+          xref:[{course:"linux", n:15, why:"the netfilter chains those rules are written into"}] },
+        { n:11, file:"11-coredns.html", title:"DNS and service discovery", soon:true,
+          desc:"CoreDNS, the search domain list, and the ndots setting that quietly multiplies your query volume.",
+          keys:"coredns dns service discovery search domain ndots resolv.conf headless srv record" },
+        { n:12, file:"12-ingress-gateway.html", title:"Ingress and Gateway API", soon:true,
+          desc:"Ingress controllers, TLS termination, path and host routing, and what Gateway API changes.",
+          keys:"ingress controller gateway api httproute tls termination sni path routing cert-manager",
+          xref:[{course:"the-wire", n:10, why:"how those certificates are issued and renewed"}] },
+        { n:13, file:"13-network-policy.html", title:"Network policy", soon:true,
+          desc:"Default-allow is the starting point. Ingress and egress selectors, and how a CNI enforces them.",
+          keys:"network policy default allow deny ingress egress podselector namespaceselector cilium calico ebpf",
+          xref:[{course:"the-wire", n:22, why:"where this sits in a defence-in-depth design"}] },
+        { n:14, file:"14-storage-csi.html", title:"Volumes, PVs and CSI", soon:true,
+          desc:"The PV/PVC binding dance, StorageClasses and dynamic provisioning, CSI attach, mount and detach.",
+          keys:"volume persistentvolume persistentvolumeclaim storageclass dynamic provisioning csi attach mount reclaim policy",
+          xref:[{course:"linux", n:6, why:"what mounting actually does to a namespace"}] },
+        { n:15, file:"15-statefulsets.html", title:"StatefulSets", soon:true,
+          desc:"Stable identity, ordered rollout, headless services and per-replica volume claims.",
+          keys:"statefulset stable identity ordinal headless service pvc template ordered rollout partition" },
+        { n:16, file:"16-deployments-rollouts.html", title:"Deployments and rollouts", soon:true,
+          desc:"ReplicaSet mechanics, maxSurge and maxUnavailable, revision history, rollback and stuck rollouts.",
+          keys:"deployment replicaset rollout maxsurge maxunavailable revision history rollback progress deadline recreate" },
+        { n:17, file:"17-config-secrets.html", title:"ConfigMaps and Secrets", soon:true,
+          desc:"Projection into env and volumes, update propagation delay, immutability, and why Secrets are only base64.",
+          keys:"configmap secret projected volume env update propagation immutable base64 encryption at rest sealed secrets external secrets",
+          xref:[{course:"the-wire", n:21, why:"envelope encryption and doing this properly"}] },
+        { n:18, file:"18-resources-qos.html", title:"Requests, limits and QoS", soon:true,
+          desc:"How requests drive scheduling and limits drive enforcement. Guaranteed, Burstable, BestEffort, throttling and OOMKill.",
+          keys:"requests limits qos guaranteed burstable besteffort cpu throttling cfs quota oomkill memory pressure",
+          xref:[{course:"linux", n:10, why:"cgroups v2 is what enforces every one of these numbers"},
+                {course:"linux", n:5,  why:"how the OOM killer chooses its victim"}] },
+        { n:19, file:"19-autoscaling.html", title:"Autoscaling", soon:true,
+          desc:"The HPA algorithm and its stabilisation windows, VPA's conflict with it, and node autoscaling.",
+          keys:"hpa vpa cluster autoscaler karpenter metrics server custom metrics stabilisation scale to zero keda" },
+        { n:20, file:"20-rbac-identity.html", title:"RBAC and workload identity", soon:true,
+          desc:"Subjects, verbs and resources, role aggregation, service accounts and bound projected tokens.",
+          keys:"rbac role clusterrole binding subject verb service account bound token projected oidc workload identity impersonation",
+          xref:[{course:"the-wire", n:19, why:"the token and federation model underneath"}] },
+        { n:21, file:"21-admission-control.html", title:"Admission control", soon:true,
+          desc:"Mutating and validating webhooks, ordering, failure policy, and CEL-based policy without a webhook.",
+          keys:"admission webhook mutating validating failurepolicy cel validatingadmissionpolicy opa gatekeeper kyverno pod security admission" },
+        { n:22, file:"22-crds-operators.html", title:"CRDs and operators", soon:true,
+          desc:"Extending the API, owner references and garbage collection, finalizers, and the operator pattern.",
+          keys:"crd custom resource operator finalizer owner reference garbage collection status subresource conversion webhook" },
+        { n:23, file:"23-debugging.html", title:"Debugging by symptom", soon:true,
+          desc:"A decision tree from the error you actually see: Pending, CrashLoopBackOff, ImagePullBackOff, OOMKilled, DNS failures.",
+          keys:"debugging pending crashloopbackoff imagepullbackoff oomkilled evicted dns failure events describe ephemeral container" },
+        { n:24, file:"24-capstone.html", title:"Capstone: apply to answer", soon:true,
+          desc:"One manifest from kubectl to a packet arriving at a container, with every component visible at once.",
+          keys:"capstone end to end kubectl apply full path request lifecycle" }
+      ],
+      appendix: [
+        { file:"appendix-kubectl.html", title:"kubectl field guide", desc:"The commands and jsonpath queries worth memorising.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "linux",
+      slug: "linux",
+      title: "Under the Hood",
+      subtitle: "Linux internals",
+      hero: "The machine your abstractions are standing on",
+      blurb: "Processes, memory, filesystems and isolation, from the syscall boundary down. Part III is the foundation every container runtime is built from.",
+      parts: [
+        { id:"I",   name:"Foundations",          range:[1,5] },
+        { id:"II",  name:"I/O and filesystems",  range:[6,8] },
+        { id:"III", name:"Isolation",            range:[9,12] },
+        { id:"IV",  name:"Communication",        range:[13,15] },
+        { id:"V",   name:"Runtime and observability", range:[16,20] }
+      ],
+      chapters: [
+        { n:1, file:"01-kernel-boundary.html", title:"The kernel boundary", soon:true,
+          desc:"User space and kernel space, the syscall mechanism, the stable ABI, and reading a trace.",
+          keys:"syscall kernel user space ring privilege abi vdso strace errno context switch" },
+        { n:2, file:"02-processes.html", title:"Processes", soon:true,
+          desc:"task_struct, fork and exec and exit, PIDs and PPIDs, orphans and zombies, the process tree.",
+          keys:"process task_struct fork exec exit clone pid ppid zombie orphan reaping wait exit status" },
+        { n:3, file:"03-scheduler.html", title:"The scheduler", soon:true,
+          desc:"CFS and its EEVDF successor, virtual runtime, nice and weights, preemption and load average.",
+          keys:"scheduler cfs eevdf vruntime nice weight runqueue preemption load average cpu affinity latency" },
+        { n:4, file:"04-virtual-memory.html", title:"Virtual memory", soon:true,
+          desc:"Address translation level by level, page tables and the TLB, mmap, demand paging and copy-on-write.",
+          keys:"virtual memory page table tlb mmu address translation page fault demand paging copy on write huge pages rss vsz" },
+        { n:5, file:"05-memory-pressure.html", title:"Memory pressure", soon:true,
+          desc:"The page cache, dirty writeback, swap and reclaim, and exactly how the OOM killer picks a victim.",
+          keys:"page cache dirty writeback swap swappiness reclaim kswapd oom killer oom_score_adj psi memory pressure",
+          xref:[{course:"kubernetes", n:18, why:"how Kubernetes exposes these as limits and QoS"}] },
+        { n:6, file:"06-files-descriptors.html", title:"Files and descriptors", soon:true,
+          desc:"The VFS, inodes and dentries, the three-table model of open files, and what fork actually shares.",
+          keys:"vfs inode dentry file descriptor open file table fork share offset dup redirect mount namespace" },
+        { n:7, file:"07-filesystems.html", title:"Filesystems", soon:true,
+          desc:"Journaling, extents and allocation, and precisely what fsync does and does not promise.",
+          keys:"ext4 xfs btrfs journaling extent allocation fsync fdatasync durability barrier overlayfs tmpfs" },
+        { n:8, file:"08-block-io.html", title:"The block layer and modern I/O", soon:true,
+          desc:"Request queues and I/O schedulers, and the real difference between blocking, epoll and io_uring.",
+          keys:"block layer bio request queue scheduler mq-deadline none blocking nonblocking epoll io_uring direct io readahead" },
+        { n:9, file:"09-namespaces.html", title:"Namespaces", soon:true,
+          desc:"All seven namespace types, entering and creating them by hand, and how a PID looks different from inside.",
+          keys:"namespace pid mount network uts ipc user cgroup unshare nsenter setns clone flags rootless" },
+        { n:10, file:"10-cgroups.html", title:"cgroups v2", soon:true,
+          desc:"The unified hierarchy, cpu.max throttling, memory.high versus memory.max, and pressure stall information.",
+          keys:"cgroup v2 unified hierarchy controller cpu.max cpu.weight memory.high memory.max io.max psi throttling delegation",
+          xref:[{course:"kubernetes", n:18, why:"the requests and limits that write these files"}] },
+        { n:11, file:"11-capabilities-seccomp.html", title:"Capabilities, seccomp and LSMs", soon:true,
+          desc:"Splitting root into capabilities, filtering syscalls with BPF, and where SELinux and AppArmor sit.",
+          keys:"capabilities cap_net_bind setuid no_new_privs seccomp bpf filter selinux apparmor lsm privileged container",
+          xref:[{course:"the-wire", n:22, why:"pod hardening built on exactly these primitives"}] },
+        { n:12, file:"12-container-from-scratch.html", title:"Build a container from scratch", soon:true,
+          desc:"pivot_root plus namespaces plus cgroups plus seccomp, in about fifty lines. No runtime involved.",
+          keys:"container from scratch chroot pivot_root namespace cgroup seccomp rootfs overlay runc oci",
+          xref:[{course:"kubernetes", n:8, why:"what containerd and runc do with all of this"}] },
+        { n:13, file:"13-signals.html", title:"Signals", soon:true,
+          desc:"Delivery and handlers, async-signal-safety, SIGTERM versus SIGKILL, process groups and PID 1's special role.",
+          keys:"signal sigterm sigkill sighup sigchld handler async signal safe process group session pid 1 init zombie reaping",
+          xref:[{course:"kubernetes", n:6, why:"why your pod ignores SIGTERM and gets killed after 30 seconds"}] },
+        { n:14, file:"14-ipc.html", title:"Inter-process communication", soon:true,
+          desc:"Pipes and their buffer, unix domain sockets and fd passing, shared memory, eventfd and futexes.",
+          keys:"ipc pipe fifo unix domain socket scm_rights fd passing shared memory shm eventfd futex mutex message queue" },
+        { n:15, file:"15-network-stack.html", title:"The network stack", soon:true,
+          desc:"From socket write to NIC, the sk_buff, netfilter hook points, conntrack and where iptables rules run.",
+          keys:"socket sk_buff netfilter hook prerouting postrouting nat conntrack iptables nftables tc qdisc napi rss",
+          xref:[{course:"kubernetes", n:10, why:"kube-proxy writes rules into these exact chains"},
+                {course:"the-wire", n:20, why:"where firewalling and segmentation attach"}] },
+        { n:16, file:"16-elf-linking.html", title:"ELF, linking and loading", soon:true,
+          desc:"Sections and segments, static versus dynamic linking, the dynamic linker, PLT and GOT, LD_PRELOAD.",
+          keys:"elf section segment static dynamic linking ld.so plt got relocation symbol ld_preload rpath strip" },
+        { n:17, file:"17-proc-sys.html", title:"/proc and /sys", soon:true,
+          desc:"Where every monitoring tool gets its numbers, and how to read them without a tool at all.",
+          keys:"proc sys procfs sysfs pid status maps fd smaps stat meminfo cgroup sysctl top ps monitoring" },
+        { n:18, file:"18-ebpf.html", title:"eBPF", soon:true,
+          desc:"The verifier, maps, program types and attach points, plus bpftrace one-liners worth keeping.",
+          keys:"ebpf bpf verifier map kprobe uprobe tracepoint xdp tc bpftrace bcc observability cilium" },
+        { n:19, file:"19-performance.html", title:"Performance methodology", soon:true,
+          desc:"The USE method, flame graphs, perf, and telling a latency problem from a throughput problem.",
+          keys:"performance use method utilisation saturation errors flame graph perf latency throughput percentile off-cpu" },
+        { n:20, file:"20-boot.html", title:"Boot", soon:true,
+          desc:"Firmware to bootloader to kernel to initramfs to PID 1, and what systemd does with the units it finds.",
+          keys:"boot uefi bios grub kernel initramfs pid 1 systemd unit target dependency cgroup slice journald" }
+      ],
+      appendix: [
+        { file:"appendix-commands.html", title:"Command reference", desc:"The diagnostic commands worth memorising, grouped by subsystem.", soon:true }
+      ]
+    }
+  ]
+};
+
+/* Resolve the course this page belongs to. Pages set window.COURSE_ID. */
+window.getCourse = function (id) {
+  id = id || window.COURSE_ID;
+  return LIBRARY.courses.filter(function (c) { return c.id === id; })[0] || null;
+};
+
+</script>
+<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>
+/* Shared behaviour for every page in the library.
+   Pages declare where they are with:
+     window.COURSE_ID  = "linux"            (course landing and chapters)
+     document.body.dataset.chapter = "10"   (chapter pages only)
+     window.DEPTH      = 0 | 1 | 2          (folders below the library root)
+*/
+(function () {
+  'use strict';
+
+  var DEPTH = (typeof window.DEPTH === 'number') ? window.DEPTH : 0;
+  var UP = new Array(DEPTH + 1).join('../');
+
+  /* ---------- progress, namespaced per course ---------- */
+  var mem = {};
+  function key(cid) { return 'library.progress.' + cid + '.v1'; }
+  function read(cid) { try { return JSON.parse(localStorage.getItem(key(cid))) || {}; } catch (e) { return mem[cid] || {}; } }
+  function save(cid, o) { mem[cid] = o; try { localStorage.setItem(key(cid), JSON.stringify(o)); } catch (e) {} }
+
+  window.Progress = {
+    all:    function (cid) { return read(cid || window.COURSE_ID); },
+    isDone: function (n, cid) { return !!read(cid || window.COURSE_ID)[n]; },
+    set:    function (n, v, cid) {
+      cid = cid || window.COURSE_ID;
+      var o = read(cid); if (v) o[n] = 1; else delete o[n]; save(cid, o);
+    },
+    reset:  function (cid) { save(cid || window.COURSE_ID, {}); },
+    count:  function (cid) { return Object.keys(read(cid)).length; }
+  };
+
+  /* ---------- lab copy buttons ---------- */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-copy]');
+    if (!b) return;
+    var txt = b.closest('.lab').querySelector('pre').innerText;
+    var done = function () { var o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1400); };
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).then(done, done);
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+
+  /* ---------- quiz ---------- */
+  document.addEventListener('click', function (e) {
+    var opt = e.target.closest('.opt');
+    if (!opt) return;
+    var q = opt.closest('.q');
+    if (q.dataset.answered) return;
+    q.dataset.answered = '1';
+    var opts = Array.prototype.slice.call(q.querySelectorAll('.opt'));
+    var right = parseInt(q.dataset.answer, 10);
+    opts.forEach(function (o, i) { if (i === right) o.classList.add('right'); });
+    if (opts.indexOf(opt) !== right) opt.classList.add('wrong');
+    var why = q.querySelector('.why');
+    if (why) why.classList.add('show');
+  });
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  /* ---------- side navigation ---------- */
+  function buildNav() {
+    var host = document.getElementById('side');
+    if (!host || !window.LIBRARY) return;
+
+    var course = window.getCourse();
+    if (!course) return;
+
+    var cur = parseInt(document.body.dataset.chapter, 10) || 0;
+    var inChapters = !!document.body.dataset.chapter;
+    var chPre = inChapters ? '' : 'chapters/';
+    var courseHome = inChapters ? '../index.html' : 'index.html';
+
+    var switcher = LIBRARY.courses.map(function (c) {
+      var href = UP + c.slug + '/index.html';
+      return '<a class="cswitch' + (c.id === course.id ? ' on' : '') + '" href="' + href + '">' +
+             '<span class="cs-t">' + c.title + '</span>' +
+             '<span class="cs-s">' + c.subtitle + '</span></a>';
+    }).join('');
+
+    host.innerHTML =
+      '<a class="liblink" href="' + UP + 'index.html">&larr; ' + LIBRARY.title + '</a>' +
+      '<a class="brand" href="' + courseHome + '">' +
+        '<span class="bt">' + course.title + '</span>' +
+        '<span class="bs">' + course.subtitle + '</span></a>' +
+      '<button class="navtoggle" id="navtoggle">Contents &amp; search</button>' +
+      '<div class="navbody" id="navbody">' +
+        '<div class="cswitchwrap">' + switcher + '</div>' +
+        '<div class="navsearch"><span class="gl">&#9906;</span>' +
+          '<input id="navq" type="search" placeholder="Search this course" autocomplete="off"></div>' +
+        '<div class="navprog"><div class="bar"><div class="fill" id="navfill"></div></div>' +
+          '<div class="txt"><span id="navpt"></span><button id="navreset">Reset</button></div></div>' +
+        '<div id="navlists"></div>' +
+      '</div>';
+
+    var qEl = host.querySelector('#navq');
+
+    function renderLists() {
+      var f = qEl.value.trim().toLowerCase(), html = '', shown = 0;
+
+      course.parts.forEach(function (p) {
+        var chs = course.chapters.filter(function (c) {
+          if (c.n < p.range[0] || c.n > p.range[1]) return false;
+          if (!f) return true;
+          return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
+        });
+        if (!chs.length) return;
+        shown += chs.length;
+        html += '<p class="navpart">' + p.id + ' &middot; ' + p.name + '</p><ul class="navlist">';
+        chs.forEach(function (c) {
+          var cls = 'navlink' + (c.n === cur ? ' here' : '') +
+            (Progress.isDone(c.n, course.id) ? ' is-done' : '') + (c.soon ? ' is-soon' : '');
+          var inner = '<span class="nn">' + pad(c.n) + '</span><span>' + c.title + '</span>';
+          html += '<li>' + (c.soon ? '<span class="' + cls + '">' + inner + '</span>'
+                                   : '<a class="' + cls + '" href="' + chPre + c.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      });
+
+      var apx = (course.appendix || []).filter(function (a) {
+        return !f || (a.title + ' ' + a.desc).toLowerCase().indexOf(f) > -1;
+      });
+      if (apx.length) {
+        shown += apx.length;
+        html += '<p class="navpart">Appendix</p><ul class="navlist">';
+        apx.forEach(function (a) {
+          var inner = '<span class="nn">&mdash;</span><span>' + a.title + '</span>';
+          html += '<li>' + (a.soon ? '<span class="navlink is-soon">' + inner + '</span>'
+                                   : '<a class="navlink" href="' + chPre + a.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      }
+
+      if (!shown) html = '<p class="navempty">No chapter in this course matches. Search covers titles, summaries and keywords.</p>';
+      host.querySelector('#navlists').innerHTML = html;
+
+      var here = host.querySelector('.navlink.here');
+      if (here && !f) {
+        var top = here.offsetTop - host.clientHeight / 2;
+        if (top > 0) host.scrollTop = top;
+      }
+      if (typeof window.onCourseFilter === 'function') window.onCourseFilter(f);
+    }
+
+    function renderProgress() {
+      var n = Progress.count(course.id), t = course.chapters.length;
+      host.querySelector('#navfill').style.width = (n / t * 100) + '%';
+      host.querySelector('#navpt').textContent = n + ' / ' + t + ' complete';
+    }
+
+    qEl.addEventListener('input', renderLists);
+    host.querySelector('#navreset').addEventListener('click', function () {
+      Progress.reset(course.id); renderLists(); renderProgress();
+    });
+    host.querySelector('#navtoggle').addEventListener('click', function () {
+      host.querySelector('#navbody').classList.toggle('open');
+    });
+
+    window.refreshCourseNav = function () { renderLists(); renderProgress(); };
+    renderLists(); renderProgress();
+  }
+
+  /* ---------- chapter prev/next and completion ---------- */
+  function chapterChrome() {
+    var n = parseInt(document.body.dataset.chapter, 10);
+    var course = window.getCourse && window.getCourse();
+    if (!n || !course) return;
+
+    var chs = course.chapters;
+    var i = chs.findIndex(function (c) { return c.n === n; });
+    var prev = chs[i - 1], next = chs[i + 1], cur = chs[i];
+
+    function link(c, dir) {
+      if (!c) return '<span></span>';
+      var label = (dir === 'prev' ? '\u2190 ' : '') + pad(c.n) + ' \u00B7 ' + c.title + (dir === 'next' ? ' \u2192' : '');
+      return c.soon ? '<span style="opacity:.45">' + label + '</span>'
+                    : '<a href="' + c.file + '">' + label + '</a>';
+    }
+
+    var top = document.querySelector('.chapnav');
+    if (top) top.innerHTML = link(prev, 'prev') + '<a href="../index.html">All chapters</a>' + link(next, 'next');
+
+    var foot = document.querySelector('.chapfoot');
+    if (foot) foot.innerHTML = link(prev, 'prev') + link(next, 'next');
+
+    var db = document.querySelector('.donebar');
+    if (db) {
+      db.innerHTML = '<label><input type="checkbox" id="doneck"> Mark chapter ' + n + ', ' + cur.title + ', as complete</label>';
+      var ck = db.querySelector('#doneck');
+      ck.checked = Progress.isDone(n, course.id);
+      ck.addEventListener('change', function () {
+        Progress.set(n, ck.checked, course.id);
+        if (window.refreshCourseNav) window.refreshCourseNav();
+      });
+    }
+  }
+
+  /* ---------- cross-course reference rendering ---------- */
+  window.xrefHTML = function (c, fromCourseId) {
+    if (!c.xref || !c.xref.length) return '';
+    return '<span class="xrefs">' + c.xref.map(function (x) {
+      var tc = window.getCourse(x.course);
+      if (!tc) return '';
+      var tch = tc.chapters.filter(function (y) { return y.n === x.n; })[0];
+      if (!tch) return '';
+      var href = UP + tc.slug + '/chapters/' + tch.file;
+      var label = tc.subtitle + ' \u00B7 ' + pad(x.n) + ' ' + tch.title;
+      return '<span class="xref">' + (tch.soon
+        ? '<span class="xr-dead">' + label + '</span>'
+        : '<a href="' + href + '">' + label + '</a>') +
+        '<span class="xr-why">' + x.why + '</span></span>';
+    }).join('') + '</span>';
+  };
+
+  function init() { buildNav(); chapterChrome(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>14 · Cipher suites decoded — The Wire</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root{
+  --paper:#FBFBF7;
+  --paper-2:#F2F2EA;
+  --ink:#14161A;
+  --ink-soft:#4A4F58;
+  --rule:#DCDDD4;
+  --client:#1B4FD8;
+  --server:#D6006E;
+  --ok:#0B8A5B;
+  --warn:#E8A317;
+  --bad:#C1121F;
+  --display:'Space Grotesk',system-ui,sans-serif;
+  --body:'Source Serif 4',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --nav-w:296px;
+  --measure:78ch;
+}
+
+.course-the-wire  { --client:#1B4FD8; --server:#D6006E; }
+.course-kubernetes{ --client:#0F6E8C; --server:#E2622A; }
+.course-linux     { --client:#5C3D99; --server:#C48A16; }
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--body);font-size:18px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wire-rail{
+  height:3px;width:100%;position:fixed;top:0;left:0;z-index:80;
+  background:linear-gradient(90deg,var(--client) 0%,var(--client) 40%,var(--server) 60%,var(--server) 100%);
+}
+
+/* ============ two-column shell ============ */
+.layout{display:grid;grid-template-columns:var(--nav-w) minmax(0,1fr);align-items:start}
+
+.sidenav{
+  position:sticky;top:0;height:100vh;overflow-y:auto;overscroll-behavior:contain;
+  border-right:1px solid var(--rule);background:var(--paper-2);
+  padding:26px 22px 40px;
+}
+.sidenav::-webkit-scrollbar{width:8px}
+.sidenav::-webkit-scrollbar-thumb{background:#cfd0c6;border-radius:99px}
+
+.content{padding:48px 56px 110px;min-width:0}
+.col{max-width:var(--measure)}
+
+/* ============ side nav internals ============ */
+.brand{display:block;text-decoration:none;color:inherit;margin-bottom:4px}
+.brand .bt{font-family:var(--display);font-weight:700;font-size:1.32rem;letter-spacing:-.02em;line-height:1.1}
+.brand .bs{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-top:5px}
+.brand:hover .bt{color:var(--client)}
+
+.navsearch{
+  display:flex;align-items:center;gap:8px;margin:20px 0 16px;
+  border:1.5px solid var(--rule);background:#fff;padding:8px 10px;border-radius:2px;
+}
+.navsearch:focus-within{border-color:var(--ink)}
+.navsearch input{border:0;outline:0;background:transparent;width:100%;min-width:0;color:var(--ink);font:400 12.5px/1.4 var(--mono)}
+.navsearch .gl{font-size:12px;color:var(--ink-soft)}
+
+.navprog{margin-bottom:22px}
+.navprog .bar{height:5px;background:#e3e4db;border-radius:99px;overflow:hidden}
+.navprog .fill{height:100%;width:0;background:linear-gradient(90deg,var(--client),var(--server));transition:width .35s}
+.navprog .txt{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:7px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.navprog .txt button{font:inherit;background:none;border:0;color:var(--ink-soft);text-decoration:underline;cursor:pointer;padding:0}
+.navprog .txt button:hover{color:var(--bad)}
+
+.navpart{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);
+  margin:22px 0 7px;padding-bottom:5px;border-bottom:1px solid var(--rule);
+}
+.navlist{list-style:none;margin:0;padding:0}
+.navlist li{margin:0}
+.navlink{
+  display:grid;grid-template-columns:22px minmax(0,1fr);gap:9px;align-items:start;
+  padding:6px 8px 6px 6px;margin-left:-6px;border-radius:2px;
+  text-decoration:none;color:var(--ink);
+  font-family:var(--display);font-weight:400;font-size:12.9px;line-height:1.38;
+}
+.navlink:hover{background:#fff}
+.navlink .nn{font-family:var(--mono);font-size:10px;color:var(--ink-soft);padding-top:2px}
+.navlink.here{background:#fff;font-weight:600;box-shadow:inset 2px 0 0 var(--server)}
+.navlink.here .nn{color:var(--server)}
+.navlink.is-done .nn::after{content:" \2713";color:var(--ok)}
+.navlink.is-soon{color:#9a9e96;pointer-events:none}
+.navempty{font-family:var(--mono);font-size:11px;color:var(--ink-soft);padding:14px 0;line-height:1.6}
+
+/* ============ typography ============ */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 16px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(2rem,3.6vw,3.1rem);line-height:1.05;letter-spacing:-.025em;margin:0}
+h2{font-family:var(--display);font-weight:700;font-size:1.6rem;letter-spacing:-.015em;margin:3.2rem 0 .8rem;scroll-margin-top:24px}
+h3{font-family:var(--display);font-weight:500;font-size:1.16rem;margin:2.2rem 0 .5rem}
+p{margin:0 0 1.05em;max-width:var(--measure)}
+a{color:var(--client)}
+ul,ol{max-width:var(--measure);padding-left:1.25em}
+li{margin:.3em 0}
+strong{font-weight:600}
+code{font-family:var(--mono);font-size:.85em;background:var(--paper-2);padding:.12em .38em;border:1px solid var(--rule);border-radius:3px}
+
+header.masthead{padding:0 0 30px;border-bottom:1px solid var(--rule);margin-bottom:40px}
+.lede{font-size:1.16rem;line-height:1.55;color:var(--ink-soft);max-width:68ch;margin:18px 0 0}
+
+/* ============ index page ============ */
+.tocpart{
+  font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft);
+  margin:40px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--rule);max-width:var(--measure);
+}
+.toc{list-style:none;padding:0;margin:0;max-width:var(--measure)}
+.toc li{margin:0}
+.tocitem{
+  display:grid;grid-template-columns:50px minmax(0,1fr) auto;column-gap:16px;align-items:start;
+  padding:14px 12px;border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  transition:background .12s,padding-left .12s;
+}
+.tocitem:hover{background:#fff;padding-left:18px}
+.tocnum{font-family:var(--mono);font-size:12px;color:var(--client);font-weight:700;padding-top:3px}
+.toctitle{display:block;font-family:var(--display);font-weight:600;font-size:1.06rem;line-height:1.3;letter-spacing:-.01em}
+.tocdesc{display:block;font-size:.9rem;color:var(--ink-soft);line-height:1.5;margin-top:5px}
+.tocstate{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;padding-top:5px}
+.tocitem.done{background:#fff}
+.tocitem.done .tocstate{color:var(--ok)}
+.tocitem.done .tocnum::after{content:" \2713";color:var(--ok)}
+.tocitem.soon{opacity:.5}
+
+/* ============ chapter chrome ============ */
+.chapnav{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:0 0 22px;margin-bottom:26px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;max-width:var(--measure)}
+.chapnav a{text-decoration:none;color:var(--ink-soft)}
+.chapnav a:hover{color:var(--client)}
+.chapfoot{display:flex;justify-content:space-between;gap:16px;margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12.5px;max-width:var(--measure)}
+.donebar{margin:52px 0 0;padding:20px;background:#fff;border:1px solid var(--rule);border-left:3px solid var(--ok);max-width:var(--measure)}
+.donebar label{font-family:var(--mono);font-size:12.5px;display:flex;gap:10px;align-items:center;cursor:pointer;line-height:1.4}
+.donebar input{width:18px;height:18px;accent-color:var(--ok);flex:none}
+
+/* ============ content blocks ============ */
+.callout{border-left:3px solid var(--client);background:#fff;padding:16px 20px;margin:1.8em 0;max-width:var(--measure);font-size:.96rem}
+.callout.warn{border-left-color:var(--warn)}
+.callout.bad{border-left-color:var(--bad)}
+.callout.rfc{border-left-color:var(--ink-soft)}
+.callout .tag{font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px}
+.callout p:last-child{margin-bottom:0}
+
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:#fff;border:1px solid var(--rule);border-top:3px solid var(--ink);padding:16px;overflow-x:auto;margin:1.6em 0;max-width:var(--measure)}
+pre code{background:none;border:0;padding:0;font-size:inherit}
+.lab{margin:1.8em 0;max-width:var(--measure)}
+.lab .labhead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;background:var(--ink);color:var(--paper);padding:7px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.lab .labhead button{font:inherit;background:transparent;border:1px solid rgba(255,255,255,.4);color:var(--paper);padding:3px 8px;cursor:pointer;border-radius:2px}
+.lab .labhead button:hover{background:rgba(255,255,255,.15)}
+.lab pre{margin:0;border-top:0;max-width:none}
+
+table{border-collapse:collapse;width:100%;max-width:var(--measure);margin:1.6em 0;font-size:.9rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+td code{font-size:.84em}
+
+/* ============ interactive frame ============ */
+.demo{border:1px solid var(--rule);background:#fff;margin:2.2em 0;max-width:var(--measure)}
+.demo .demohead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);padding:9px 16px;border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.demo .demobody{padding:20px}
+.demo .demonote{padding:12px 16px;border-top:1px solid var(--rule);background:var(--paper-2);font-size:.86rem;color:var(--ink-soft);line-height:1.55}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.ctl label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft)}
+.ctl input[type=text],.ctl input[type=number],.ctl select,textarea{font-family:var(--mono);font-size:13px;padding:7px 9px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);border-radius:2px}
+textarea{width:100%;resize:vertical}
+.chip{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink-soft)}
+.chip:hover{border-color:var(--ink)}
+.chip[aria-pressed=true],.chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.out{font-family:var(--mono);font-size:12.5px;word-break:break-word;background:var(--paper-2);border:1px solid var(--rule);padding:12px;line-height:1.7}
+svg{max-width:100%;height:auto;display:block}
+.hexdump{font-family:var(--mono);font-size:12px;line-height:1.8;word-break:break-all}
+.hexdump .hl{background:#FFF0A8;outline:1px solid var(--warn)}
+
+/* ============ quiz ============ */
+.quiz{border:1px solid var(--rule);background:#fff;padding:22px;margin:2.4em 0;max-width:var(--measure)}
+.quiz h3{margin-top:0}
+.q{margin:0 0 22px;padding-bottom:18px;border-bottom:1px dashed var(--rule)}
+.q:last-of-type{border-bottom:0;padding-bottom:0}
+.q p.qtext{font-weight:600;margin-bottom:10px}
+.opts{display:flex;flex-direction:column;gap:7px}
+.opt{text-align:left;font-family:var(--body);font-size:.95rem;line-height:1.45;padding:9px 13px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink)}
+.opt:hover{border-color:var(--ink)}
+.opt.right{border-color:var(--ok);background:#E8F6F0;box-shadow:inset 3px 0 0 var(--ok)}
+.opt.wrong{border-color:var(--bad);background:#FBEAEA;box-shadow:inset 3px 0 0 var(--bad)}
+.why{font-size:.88rem;color:var(--ink-soft);margin-top:9px;display:none;border-left:2px solid var(--rule);padding-left:12px}
+.why.show{display:block}
+
+/* ============ responsive ============ */
+.navtoggle{
+  display:none;width:100%;text-align:left;margin-top:14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  background:#fff;border:1px solid var(--rule);color:var(--ink-soft);padding:9px 12px;cursor:pointer;border-radius:2px;
+}
+
+@media (max-width:1240px){ :root{--nav-w:258px} .content{padding:44px 40px 100px} }
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidenav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--rule);padding:22px 20px 24px}
+  .navtoggle{display:block}
+  .navbody{display:none;margin-top:16px}
+  .navbody.open{display:block}
+  .content{padding:32px 20px 80px}
+  body{font-size:17px}
+  .tocitem{grid-template-columns:38px minmax(0,1fr);column-gap:10px}
+  .tocstate{display:none}
+  .chapnav,.chapfoot{flex-direction:column;align-items:flex-start;gap:8px}
+}
+
+
+
+/* ============ library landing ============ */
+.libwrap{max-width:1000px;margin:0 auto;padding:74px 40px 110px}
+.libhead{border-bottom:1px solid var(--rule);padding-bottom:34px;margin-bottom:12px}
+.libhead h1{font-size:clamp(2.2rem,4.4vw,3.5rem)}
+.libmeta{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-top:26px;display:flex;gap:22px;flex-wrap:wrap}
+
+.courses{display:grid;gap:0;margin-top:8px}
+.ccard{
+  display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:40px;align-items:start;
+  padding:38px 20px 38px 24px;margin-left:-24px;
+  border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  position:relative;transition:background .14s;
+}
+.ccard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--c1),var(--c2));opacity:.85}
+.ccard:hover{background:#fff}
+.ccard.locked{opacity:.62;cursor:default}
+.cc-sub{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:10px}
+.cc-title{font-family:var(--display);font-weight:700;font-size:1.85rem;letter-spacing:-.022em;line-height:1.08;margin:0 0 4px}
+.cc-hero{font-family:var(--display);font-weight:400;font-size:1.02rem;color:var(--ink-soft);margin:0 0 14px;line-height:1.35}
+.cc-blurb{font-size:.95rem;line-height:1.6;color:var(--ink-soft);margin:0;max-width:56ch}
+.cc-parts{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:16px;line-height:1.9}
+.cc-parts b{color:var(--ink);font-weight:400}
+
+.cc-side{padding-top:26px}
+.ring{display:block;margin:0 0 12px}
+.cc-stat{font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.8}
+.cc-stat strong{color:var(--ink);font-weight:700}
+.cc-go{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;margin-top:14px;display:inline-block}
+.ccard:hover .cc-go{color:var(--server)}
+
+/* ============ course switcher in the side nav ============ */
+.liblink{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;margin-bottom:16px}
+.liblink:hover{color:var(--ink)}
+.cswitchwrap{display:grid;gap:3px;margin:0 0 20px;padding-bottom:18px;border-bottom:1px solid var(--rule)}
+.cswitch{display:block;text-decoration:none;padding:7px 9px;border-radius:2px;border:1px solid transparent}
+.cswitch:hover{background:#fff}
+.cswitch.on{background:#fff;border-color:var(--rule)}
+.cs-t{display:block;font-family:var(--display);font-weight:600;font-size:12.5px;color:var(--ink);line-height:1.2}
+.cs-s{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:3px}
+.cswitch.on .cs-t{color:var(--server)}
+
+/* ============ cross-course references ============ */
+.xrefs{display:block;margin-top:9px;display:flex;flex-direction:column;gap:4px}
+.xref{display:block;font-family:var(--mono);font-size:10.5px;line-height:1.5;padding-left:13px;position:relative}
+.xref::before{content:"\2197";position:absolute;left:0;top:0;color:var(--server);font-size:10px}
+.xref a{text-decoration:none;color:var(--client);border-bottom:1px solid rgba(27,79,216,.28)}
+.xref a:hover{border-bottom-color:var(--client)}
+.xr-dead{color:var(--ink-soft)}
+.xr-why{color:var(--ink-soft);margin-left:7px}
+
+.callout.xref-note{border-left-color:var(--server);background:#fff}
+.callout.xref-note .tag{color:var(--server)}
+
+@media (max-width:820px){
+  .libwrap{padding:44px 20px 80px}
+  .ccard{grid-template-columns:1fr;gap:20px;padding:28px 16px;margin-left:-16px}
+  .cc-side{padding-top:0;display:flex;align-items:center;gap:18px}
+  .ring{margin:0}
+}
+@media print{ .cswitchwrap,.liblink{display:none!important} }
+
+/* ============ print ============ */
+@media print{
+  :root{--paper:#fff;--measure:none}
+  body{font-size:11pt}
+  .wire-rail,.sidenav,.chapnav,.chapfoot,.donebar,.chip,.lab .labhead button,.navtoggle{display:none!important}
+  .layout{display:block}
+  .content{padding:0}
+  .demo,.quiz,pre,.callout,table{break-inside:avoid;border-color:#999}
+  a{color:inherit;text-decoration:none}
+  a[href^="http"]::after{content:" (" attr(href) ")";font-size:8pt;color:#666}
+  h2{break-after:avoid}
+  .why{display:block!important}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body class="course-the-wire" data-chapter="14">
+<div class="wire-rail"></div>
+<div class="layout">
+<aside class="sidenav" id="side"></aside>
+<main class="content">
+<nav class="chapnav"></nav>
+
+<header class="masthead">
+  <p class="eyebrow">Part IV &nbsp;·&nbsp; TLS on the wire &nbsp;·&nbsp; Chapter 14</p>
+  <h1>Cipher suites decoded</h1>
+  <p class="lede">A cipher suite name looks like line noise and is actually a complete specification of a connection's cryptography. Once you can read one, a scanner report stops being a list of strings and becomes a description of exactly which primitives from Part II are in play — and which ones you should be worried about.</p>
+</header>
+
+<div class="col">
+
+<h2>14.1 Reading the name</h2>
+
+<p>TLS 1.2 suite names encode four decisions. TLS 1.3 encodes two, because it made the other two non-negotiable.</p>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · cipher suite decoder</span><span id="csstat">—</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>Suite</label>
+      <select id="cssel" style="min-width:340px"></select>
+    </div>
+    <svg viewBox="0 0 700 130" role="img" aria-label="Cipher suite name broken into components">
+      <defs><style>
+        .csseg{cursor:pointer}
+        .csbox{stroke-width:1.5;rx:3}
+        .cstxt{font:700 11px 'JetBrains Mono',monospace;text-anchor:middle;pointer-events:none}
+        .cskind{font:400 8.5px 'JetBrains Mono',monospace;text-anchor:middle;fill:#4A4F58;pointer-events:none;letter-spacing:.1em}
+      </style></defs>
+      <g id="csg"></g>
+    </svg>
+    <div class="out" id="csout" style="margin-top:8px"></div>
+    <div class="out" id="csverdict" style="margin-top:12px;background:#fff"></div>
+  </div>
+  <div class="demonote">Click any coloured segment for what that component does and which chapter covers it. The hex code is what actually travels in the ClientHello — the readable name exists only for humans.</div>
+</div>
+
+<h2>14.2 The full anatomy</h2>
+
+<pre><code>TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+ |    |     |        |   |   |   |
+ |    |     |        |   |   |   +-- PRF/HKDF hash (Ch. 3, 13)
+ |    |     |        |   |   +------ mode: GCM is AEAD (Ch. 4)
+ |    |     |        |   +---------- key size in bits
+ |    |     |        +-------------- bulk cipher (Ch. 4)
+ |    |     +----------------------- authentication: cert key type (Ch. 7)
+ |    +----------------------------- key exchange (Ch. 6)
+ +---------------------------------- protocol
+
+TLS 1.3 collapses this:
+
+TLS_AES_128_GCM_SHA256
+ |    |   |   |   |
+ |    |   |   |   +-- HKDF hash
+ |    |   |   +------ AEAD mode
+ |    |   +---------- key size
+ |    +-------------- bulk cipher
+ +------------------- protocol
+
+  Key exchange and authentication are gone from the name because
+  they are negotiated separately, in the supported_groups and
+  signature_algorithms extensions. Only ephemeral exchange and
+  only AEAD are permitted, so there is nothing left to encode.</code></pre>
+
+<div class="callout">
+  <span class="tag">A consequence worth knowing</span>
+  <p>Because TLS 1.3 suites do not name a key exchange or authentication method, the same five suites work with RSA certificates, ECDSA certificates, Ed25519 certificates and PSK resumption. Configuration got dramatically simpler: the old advice to hand-curate a long OpenSSL cipher string is largely obsolete. For 1.3 the correct configuration is to leave the defaults alone. For 1.2, the useful work is <em>removing</em> things, not adding them.</p>
+</div>
+
+<h2>14.3 Negotiation, and who chooses</h2>
+
+<p>The client sends an ordered list; the server picks one. Which order wins is a server setting, and it matters:</p>
+
+<ul>
+<li><strong>Server preference</strong> — the server walks its own ordered list and takes the first the client also supports. Historically recommended, because clients could not be trusted to prefer strong suites.</li>
+<li><strong>Client preference</strong> — the server honours the client's order. Now often better, because modern clients pick correctly for their own hardware: a phone without AES acceleration will prefer ChaCha20, and forcing AES-GCM on it makes it slower for no security gain.</li>
+</ul>
+
+<p>The negotiation happens in cleartext and is therefore rewritable, which is why the Finished transcript MAC (Ch. 12) exists. Two further defences sit alongside it:</p>
+
+<ul>
+<li><strong><code>TLS_FALLBACK_SCSV</code></strong> — a pseudo-suite meaning "this is a retry at a lower version". A server supporting a higher version that sees it knows the downgrade was forced and aborts. This was the response to POODLE.</li>
+<li><strong>Downgrade sentinels</strong> — TLS 1.3 servers that negotiate 1.2 or lower place a known 8-byte value at the end of <code>server_random</code>. A 1.3-capable client seeing it knows something interfered, and fails.</li>
+</ul>
+
+<h2>14.4 The extensions that matter</h2>
+
+<h3>SNI — Server Name Indication</h3>
+<p>One IP address, many sites. The server must choose a certificate before it can send one, and the only way it knows which is the client telling it — in the ClientHello, before any keys exist. So <strong>the hostname you are visiting travels in cleartext on every single connection</strong>.</p>
+
+<p>This is the largest metadata leak in TLS, and it is used at scale: national filtering systems block by SNI, corporate proxies log by SNI, and network operators categorise traffic by SNI. Encrypting the rest of the handshake in TLS 1.3 made the gap more conspicuous rather than smaller.</p>
+
+<h3>ALPN — Application-Layer Protocol Negotiation</h3>
+<p>Which protocol runs inside the tunnel — <code>h2</code>, <code>http/1.1</code>, <code>h3</code> — agreed during the handshake rather than after it, saving a round trip. HTTP/2 over TLS requires it. It is also how a single port serves multiple protocols, and how the TLS-ALPN-01 ACME challenge (Ch. 10) works: a value of <code>acme-tls/1</code> triggers the validation certificate instead of the real one.</p>
+
+<h3>ECH — Encrypted Client Hello</h3>
+<p>The fix for SNI, and the interesting part is how it escapes the chicken-and-egg problem. The server operator publishes an HPKE public key in DNS, in an HTTPS resource record. The client fetches it — over DoH, so the lookup itself is not observable — and sends two ClientHellos:</p>
+
+<ul>
+<li>An <strong>outer</strong> ClientHello with an innocuous SNI, typically the shared provider's name, such as <code>cloudflare-ech.com</code>.</li>
+<li>An <strong>inner</strong> ClientHello, encrypted to the published key, carrying the real SNI and any other sensitive extensions.</li>
+</ul>
+
+<p>An observer sees a connection to a large provider and cannot tell which of the millions of sites behind it you reached. The anonymity set is every site sharing that ECH configuration, which is exactly why ECH works best on large shared infrastructure and gives little on a dedicated IP serving one domain.</p>
+
+<div class="callout warn">
+  <span class="tag">What ECH does not hide</span>
+  <p>The destination IP address is still visible, so on a dedicated host it identifies the site regardless. Traffic volume and timing still leak, and page fingerprinting from sizes alone remains effective. ECH also depends on encrypted DNS — if the client resolves the HTTPS record over plain DNS, the observer learns the hostname there instead and ECH has moved the leak rather than closed it. Its predecessor ESNI was withdrawn partly because it encrypted only the SNI field, leaving other extensions to fingerprint against; ECH encrypts the whole inner ClientHello for that reason.</p>
+</div>
+
+<h3>GREASE</h3>
+<p>A small idea with a large purpose. Clients deliberately advertise reserved, meaningless values in extension and cipher-suite lists. A correct implementation ignores unknown values; a brittle middlebox chokes. By poisoning the well continuously, GREASE ensures intolerant implementations break immediately and visibly rather than three years later when a real new value appears. It is a direct response to the ossification that shaped TLS 1.3's wire format (Ch. 13).</p>
+
+<h2>14.5 What to actually configure</h2>
+
+<table>
+<thead><tr><th>Setting</th><th>Recommendation</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Protocol versions</td><td>1.2 and 1.3 only</td><td>1.0 and 1.1 are deprecated by RFC 8996 and rejected by all major browsers</td></tr>
+<tr><td>TLS 1.3 suites</td><td>Leave defaults</td><td>All five are sound; the differences are performance, not security</td></tr>
+<tr><td>TLS 1.2 suites</td><td>ECDHE + AEAD only</td><td>Removes static RSA and every CBC suite in one stroke</td></tr>
+<tr><td>Groups</td><td><code>x25519, secp256r1</code>, plus a hybrid PQ group</td><td>x25519 first avoids HelloRetryRequest; hybrid addresses harvest-now-decrypt-later (Ch. 23)</td></tr>
+<tr><td>Preference order</td><td>Client preference, with a sane server list as a floor</td><td>Lets devices choose the cipher their hardware actually accelerates</td></tr>
+<tr><td>Session tickets</td><td>On, keys rotated hourly</td><td>Otherwise resumption undermines forward secrecy (Ch. 6, 15)</td></tr>
+<tr><td>0-RTT</td><td>Off unless you have audited every route</td><td>Replayable (Ch. 13)</td></tr>
+</tbody>
+</table>
+
+<p>A minimal OpenSSL-style configuration expressing all of that:</p>
+
+<pre><code># TLS 1.2 suites — the list is short because everything unsafe is simply absent
+ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:
+ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:
+ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305
+
+# TLS 1.3 suites — defaults, listed only for clarity
+TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+
+# Groups
+X25519MLKEM768:X25519:P-256</code></pre>
+
+<h2>14.6 Lab</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · read and audit suites</span><button data-copy>Copy</button></div>
+<pre><code># Decode a suite name into its parts
+openssl ciphers -V 'ECDHE-RSA-AES128-GCM-SHA256'
+#   0xC0,0x2F - ECDHE-RSA-AES128-GCM-SHA256  TLSv1.2 Kx=ECDH Au=RSA Enc=AESGCM(128) Mac=AEAD
+#   Kx = key exchange, Au = authentication, Enc = bulk cipher, Mac = AEAD means no separate MAC
+
+# Everything your OpenSSL supports, with the parts broken out
+openssl ciphers -V 'ALL:COMPLEMENTOFALL' | head -30
+
+# Suites that would be a problem, and whether you offer any
+openssl ciphers -V 'kRSA'          # static RSA: no forward secrecy
+openssl ciphers -V 'SHA1:MD5'      # legacy MAC
+openssl ciphers -V 'CBC'           # padding-oracle family
+openssl ciphers -V 'NULL:EXPORT:LOW:aNULL:eNULL' 2>/dev/null | head
+
+# What a server actually negotiates, and what it will accept at all
+openssl s_client -connect example.com:443 &lt;/dev/null 2&gt;/dev/null | grep -E 'Protocol|Cipher'
+nmap --script ssl-enum-ciphers -p 443 example.com 2>/dev/null | sed -n '/TLSv1/,/least strength/p'
+
+# Does the server honour client order or impose its own?
+openssl s_client -connect example.com:443 -tls1_2 \
+  -cipher 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256' &lt;/dev/null 2&gt;/dev/null | grep Cipher
+openssl s_client -connect example.com:443 -tls1_2 \
+  -cipher 'ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384' &lt;/dev/null 2&gt;/dev/null | grep Cipher
+#   Same result both times = server preference. Different = client preference.
+
+# SNI in the clear \u2014 see it for yourself
+sudo tcpdump -i any -n -A 'tcp port 443 and tcp[((tcp[12:1] &amp; 0xf0) &gt;&gt; 2):1] = 0x16' -c 2 \
+  2>/dev/null | grep -a -o 'example\.com'
+
+# Prove SNI selects the certificate
+openssl s_client -connect example.com:443 -servername example.com &lt;/dev/null 2&gt;/dev/null \
+  | openssl x509 -noout -subject
+openssl s_client -connect example.com:443 -servername wrong.example &lt;/dev/null 2&gt;/dev/null \
+  | openssl x509 -noout -subject     # often a different, default certificate
+
+# ALPN negotiation
+openssl s_client -connect example.com:443 -alpn h2,http/1.1 &lt;/dev/null 2&gt;/dev/null | grep -i alpn
+
+# Is ECH published for a domain? Look for the HTTPS RR with an ech= parameter
+dig +short HTTPS cloudflare.com
+dig +short HTTPS crypto.cloudflare.com</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">Why do TLS 1.3 cipher suite names omit the key exchange and authentication method?</p>
+    <div class="opts">
+      <button class="opt">They are inferred from the certificate</button>
+      <button class="opt">They are fixed to ECDHE and RSA</button>
+      <button class="opt">Only ephemeral exchange and AEAD are permitted, and the group and signature algorithm are negotiated in separate extensions</button>
+      <button class="opt">The names were shortened to save bytes</button>
+    </div>
+    <p class="why">There is nothing left to encode. Static RSA is gone, non-AEAD suites are gone, and the group and signature algorithm moved into <code>supported_groups</code> and <code>signature_algorithms</code>. One consequence is that the same five suites work with any certificate type.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">A server negotiates <code>TLS_RSA_WITH_AES_128_CBC_SHA</code>. What are the two problems?</p>
+    <div class="opts">
+      <button class="opt">No forward secrecy from static RSA, and CBC with a separate MAC exposes padding-oracle and Lucky 13 attacks</button>
+      <button class="opt">The key is too short and the hash is broken</button>
+      <button class="opt">It only works with TLS 1.0</button>
+      <button class="opt">It cannot be used with ECDSA certificates</button>
+    </div>
+    <p class="why">Two independent failures. <code>TLS_RSA</code> means the client encrypts the premaster secret to the long-term key, so one key compromise decrypts all recorded sessions. <code>CBC_SHA</code> means MAC-then-encrypt with padding, the construction behind Vaudenay's padding oracle and Lucky 13. AES-128 and SHA-1-as-a-MAC are both fine here; the problems are the mode and the exchange.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">What does Encrypted Client Hello actually hide, and from whom?</p>
+    <div class="opts">
+      <button class="opt">The destination IP address, from the ISP</button>
+      <button class="opt">The real SNI hostname from a network observer — who instead sees a connection to a shared provider</button>
+      <button class="opt">The certificate, from a machine-in-the-middle</button>
+      <button class="opt">Traffic volume and timing</button>
+    </div>
+    <p class="why">ECH encrypts the inner ClientHello to a key published in DNS, leaving an innocuous outer SNI. The IP address, sizes and timing all still leak, so the protection is only as strong as the anonymity set behind that IP — which is why it works on large shared infrastructure and gives little on a dedicated host. It also requires encrypted DNS, or the hostname leaks in the lookup instead.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">What is GREASE for?</p>
+    <div class="opts">
+      <button class="opt">Compressing extension lists</button>
+      <button class="opt">Obscuring which client is connecting</button>
+      <button class="opt">Adding entropy to the ClientHello random</button>
+      <button class="opt">Advertising reserved dummy values so intolerant middleboxes break immediately rather than years later</button>
+    </div>
+    <p class="why">Implementations that reject unknown values are the ossification problem — they make a protocol unextendable. GREASE keeps unknown values continuously present in real traffic, so anything intolerant fails during development rather than blocking a future protocol change across the whole internet.</p>
+  </div>
+</div>
+
+<h2>14.7 Carry forward</h2>
+<ul>
+<li>A 1.2 suite name specifies key exchange, authentication, bulk cipher and hash. A 1.3 name specifies only the last two.</li>
+<li>For 1.2, configuration means removing static RSA and CBC. For 1.3, leave the defaults.</li>
+<li>Negotiation is cleartext and rewritable, protected retroactively by the Finished transcript MAC plus fallback signalling.</li>
+<li>SNI is cleartext by design and is the protocol's largest metadata leak.</li>
+<li>ECH closes it by encrypting the inner ClientHello, and is only as good as the anonymity set behind the IP.</li>
+<li>GREASE keeps the protocol extensible by breaking brittle implementations on purpose.</li>
+</ul>
+
+<p>The handshake is complete and keys are established. Chapter 15 covers what happens for the rest of the connection's life.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
+</main>
+</div>
+
+<script>
+(function(){
+  var NS='http://www.w3.org/2000/svg';
+
+  var PARTS = {
+    kx: {c:'#1B4FD8', kind:'KEY EXCHANGE'},
+    au: {c:'#7A3FA0', kind:'AUTHENTICATION'},
+    enc:{c:'#0F6E8C', kind:'BULK CIPHER'},
+    mode:{c:'#0B8A5B', kind:'MODE'},
+    hash:{c:'#E2622A', kind:'HASH / PRF'},
+    tls:{c:'#4A4F58', kind:'PROTOCOL'}
+  };
+
+  var INFO = {
+    TLS:   ['Protocol', 'Every suite name begins with this. It identifies the registry the code belongs to \u2014 the two-byte hex value is what actually travels in the ClientHello, and the readable name exists purely for humans.'],
+    ECDHE: ['Key exchange: ECDHE (Ch. 6)', 'Elliptic Curve Diffie\u2013Hellman, <strong>Ephemeral</strong>. A fresh key pair per connection, discarded afterwards, giving <span style="color:#0B8A5B">forward secrecy</span> \u2014 traffic recorded today stays unreadable even if the server\u2019s long-term key leaks later. The specific curve is not in the name; it is negotiated in the <code>supported_groups</code> extension.'],
+    DHE:   ['Key exchange: DHE (Ch. 6)', 'Finite-field Diffie\u2013Hellman, ephemeral. Forward secret, but far slower than elliptic curve for the same strength and historically the vector for Logjam when servers supplied their own weak groups. RFC 7919 fixed that with named groups; ECDHE has largely replaced it anyway.'],
+    RSA_KX:['Key exchange: static RSA (Ch. 5, 12)', '<span style="color:#C1121F">No forward secrecy.</span> The client encrypts the premaster secret to the certificate\u2019s long-term public key, so anyone who ever obtains that key decrypts every session they recorded \u2014 the harvest-now-decrypt-later problem. It also keeps PKCS#1 v1.5 decryption in the hot path, which is what Bleichenbacher\u2019s attack and its 2017 descendant ROBOT exploited. Removed entirely in TLS 1.3. Turn it off in 1.2.'],
+    RSA_AU:['Authentication: RSA (Ch. 7)', 'The server\u2019s certificate carries an RSA key, used to sign the ephemeral key exchange parameters. That signature is what binds the exchange to a PKI-verified identity and closes Chapter 6\u2019s machine-in-the-middle gap. Note this is a <em>signing</em> key here \u2014 distinct from static RSA key exchange, which uses the same key to decrypt.'],
+    ECDSA: ['Authentication: ECDSA (Ch. 7)', 'The certificate carries an elliptic curve key. Signatures are 64 bytes against RSA-2048\u2019s 256, and signing is faster \u2014 which matters on a busy server signing every handshake. The trade-off is that verification is slower than RSA\u2019s, and ECDSA needs a unique nonce per signature, where reuse leaks the private key outright.'],
+    AES128:['Bulk cipher: AES-128 (Ch. 4)', '128-bit AES. Beyond brute force forever \u2014 2\u00B9\u00B2\u2078 operations exceeds any plausible energy budget \u2014 and hardware-accelerated on essentially every modern CPU via AES-NI or the ARM crypto extensions. Hardware rounds avoid lookup tables, which also removes the cache-timing attacks that troubled software AES.'],
+    AES256:['Bulk cipher: AES-256 (Ch. 4)', '256-bit AES. Chosen for regulatory requirements and for margin against Grover\u2019s algorithm, which halves symmetric strength on a quantum computer (Ch. 23). Slightly slower than AES-128 with no practical security difference today.'],
+    CHACHA20:['Bulk cipher: ChaCha20 (Ch. 4)', 'A stream cipher, paired with the Poly1305 MAC to form an AEAD. Designed for constant-time software implementation, so it is fast and side-channel-resistant on hardware without AES acceleration \u2014 which is most phones and many embedded devices. This is why offering both and honouring <em>client</em> preference is good practice: the device knows which one its silicon actually accelerates.'],
+    GCM:   ['Mode: GCM \u2014 AEAD (Ch. 4)', 'Galois/Counter Mode: CTR encryption plus a GHASH authentication tag, in one primitive. <span style="color:#0B8A5B">Confidentiality and integrity together</span>, with a single opaque failure mode rather than distinguishable padding and MAC errors. Requires a unique nonce per record \u2014 TLS derives it deterministically from the sequence number precisely so implementations cannot get this catastrophically wrong (Ch. 4).'],
+    POLY:  ['Mode: Poly1305 \u2014 AEAD (Ch. 4)', 'A one-time authenticator paired with ChaCha20. Functionally equivalent to GCM in what it provides: authenticated encryption with associated data, constant-time failure, no separate MAC key.'],
+    CBC:   ['Mode: CBC \u2014 not AEAD (Ch. 4, 17)', '<span style="color:#C1121F">Legacy and best avoided.</span> Cipher Block Chaining with a separate MAC, composed MAC-then-encrypt \u2014 the fragile ordering from Chapter 4. The receiver must decrypt before it can verify, which is exactly what creates padding oracles. Vaudenay\u2019s 2002 attack, BEAST, and the Lucky 13 timing attack all live here. Removed entirely from TLS 1.3.'],
+    SHA256:['Hash: SHA-256 (Ch. 3, 13)', 'In TLS 1.2 this is the PRF hash used for key derivation and the Finished transcript MAC. In TLS 1.3 it is the HKDF hash driving the entire key schedule. Note it is <em>not</em> a record MAC in an AEAD suite \u2014 the AEAD tag handles record integrity.'],
+    SHA384:['Hash: SHA-384 (Ch. 3, 13)', 'The same role as SHA-256 with a larger output, conventionally paired with AES-256 suites for a consistent security level throughout.'],
+    SHA1:  ['MAC: SHA-1 (Ch. 3)', '<span style="color:#C1121F">Legacy.</span> In a CBC suite this is an HMAC-SHA-1 record MAC. HMAC-SHA-1 is not itself broken \u2014 HMAC does not require collision resistance \u2014 but its presence means a non-AEAD CBC suite, which is the real problem. Any suite ending in SHA or SHA256 rather than a mode name is a CBC suite.']
+  };
+
+  var SUITES = [
+    { name:'TLS_AES_128_GCM_SHA256', hex:'0x13,0x01', v:'TLS 1.3',
+      seg:[['TLS','tls','TLS'],['AES_128','enc','AES128'],['GCM','mode','GCM'],['SHA256','hash','SHA256']],
+      verdict:['ok','<strong>The modern default.</strong> A TLS 1.3 suite: AEAD-only, and the key exchange and authentication are absent from the name because they are negotiated separately and constrained to safe choices. There is nothing to configure and nothing to get wrong. If a scanner shows this, that part of your setup is done.']},
+    { name:'TLS_CHACHA20_POLY1305_SHA256', hex:'0x13,0x03', v:'TLS 1.3',
+      seg:[['TLS','tls','TLS'],['CHACHA20','enc','CHACHA20'],['POLY1305','mode','POLY'],['SHA256','hash','SHA256']],
+      verdict:['ok','<strong>The right default on hardware without AES acceleration.</strong> Equivalent security to AES-GCM, considerably faster on most phones and embedded devices. Offer it alongside AES-GCM and honour client preference so each device gets the one its silicon accelerates.']},
+    { name:'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256', hex:'0xC0,0x2B', v:'TLS 1.2',
+      seg:[['TLS','tls','TLS'],['ECDHE','kx','ECDHE'],['ECDSA','au','ECDSA'],['AES_128','enc','AES128'],['GCM','mode','GCM'],['SHA256','hash','SHA256']],
+      verdict:['ok','<strong>The best TLS 1.2 suite.</strong> Forward secret via ECDHE, AEAD via GCM, and an ECDSA certificate keeping the handshake small. Every component is a good choice. This is what a 1.2 configuration should look like after you have removed everything else.']},
+    { name:'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384', hex:'0xC0,0x30', v:'TLS 1.2',
+      seg:[['TLS','tls','TLS'],['ECDHE','kx','ECDHE'],['RSA','au','RSA_AU'],['AES_256','enc','AES256'],['GCM','mode','GCM'],['SHA384','hash','SHA384']],
+      verdict:['ok','<strong>Fine.</strong> Forward secret and AEAD, with an RSA certificate rather than ECDSA \u2014 which means a larger handshake and slower signing, but faster verification. Keep it for compatibility with clients that have no ECDSA certificate to validate against.']},
+    { name:'TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256', hex:'0xC0,0x27', v:'TLS 1.2',
+      seg:[['TLS','tls','TLS'],['ECDHE','kx','ECDHE'],['RSA','au','RSA_AU'],['AES_128','enc','AES128'],['CBC','mode','CBC'],['SHA256','hash','SHA256']],
+      verdict:['warn','<strong>Forward secret, but not AEAD.</strong> ECDHE is doing its job; CBC is the problem. MAC-then-encrypt means the receiver decrypts attacker-controlled data before it can verify it, which is the precondition for every padding-oracle and Lucky 13 variant. Not immediately broken with a careful constant-time implementation, and there is no reason to keep it when GCM is available. Remove it.']},
+    { name:'TLS_RSA_WITH_AES_128_CBC_SHA', hex:'0x00,0x2F', v:'TLS 1.2',
+      seg:[['TLS','tls','TLS'],['RSA','kx','RSA_KX'],['AES_128','enc','AES128'],['CBC','mode','CBC'],['SHA','hash','SHA1']],
+      verdict:['bad','<strong>Two independent failures.</strong> <code>TLS_RSA</code> with no ECDHE means static RSA key exchange: <span style="color:#C1121F">no forward secrecy</span>, and a Bleichenbacher oracle in the decryption path. <code>CBC_SHA</code> means MAC-then-encrypt with padding, the padding-oracle family. Note there is no separate authentication field \u2014 with static RSA the key exchange and authentication are the same operation, which is exactly the key-reuse problem Chapter 7 warned about. Disable this.']},
+    { name:'TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA', hex:'0xC0,0x12', v:'TLS 1.2',
+      seg:[['TLS','tls','TLS'],['ECDHE','kx','ECDHE'],['RSA','au','RSA_AU'],['3DES_EDE','enc','AES128'],['CBC','mode','CBC'],['SHA','hash','SHA1']],
+      verdict:['bad','<strong>Obsolete cipher.</strong> Triple DES has a 64-bit block, and the Sweet32 attack exploits exactly that: after roughly 2\u00B3\u00B2 blocks under one key a birthday collision leaks plaintext, which is reachable on a long-lived connection in under a day. Forward secrecy from ECDHE does not save a broken bulk cipher. Remove it \u2014 the only clients needing it are old enough that you should not be serving them anyway.']}
+  ];
+
+  var sel = document.getElementById('cssel');
+  SUITES.forEach(function(s,i){
+    var o=document.createElement('option'); o.value=i; o.textContent=s.name; sel.appendChild(o);
+  });
+
+  function draw(){
+    var s = SUITES[+sel.value], g=document.getElementById('csg');
+    g.innerHTML='';
+    var total = s.seg.reduce(function(a,x){ return a + Math.max(x[0].length,6) + 2; }, 0);
+    var scale = 660/total, x = 20;
+
+    s.seg.forEach(function(seg){
+      var w = (Math.max(seg[0].length,6)+2)*scale;
+      var p = PARTS[seg[1]];
+      var r=document.createElementNS(NS,'rect');
+      r.setAttribute('class','csbox csseg'); r.setAttribute('x',x); r.setAttribute('y',34);
+      r.setAttribute('width',w-4); r.setAttribute('height',34); r.setAttribute('rx',3);
+      r.setAttribute('fill','#fff'); r.setAttribute('stroke',p.c); r.setAttribute('stroke-width','2');
+      r.setAttribute('data-i',seg[2]); r.style.cursor='pointer';
+      g.appendChild(r);
+
+      var t=document.createElementNS(NS,'text');
+      t.setAttribute('class','cstxt'); t.setAttribute('x',x+(w-4)/2); t.setAttribute('y',56);
+      t.setAttribute('fill',p.c); t.textContent=seg[0];
+      g.appendChild(t);
+
+      var k=document.createElementNS(NS,'text');
+      k.setAttribute('class','cskind'); k.setAttribute('x',x+(w-4)/2); k.setAttribute('y',84);
+      k.textContent=p.kind;
+      g.appendChild(k);
+      x += w;
+    });
+
+    var hex=document.createElementNS(NS,'text');
+    hex.setAttribute('x',20); hex.setAttribute('y',22);
+    hex.setAttribute('font-family',"'JetBrains Mono',monospace"); hex.setAttribute('font-size','10');
+    hex.setAttribute('fill','#4A4F58');
+    hex.textContent = 'on the wire: ' + s.hex + '   \u00B7   ' + s.v;
+    g.appendChild(hex);
+
+    document.getElementById('csstat').textContent = s.v;
+    document.getElementById('csout').innerHTML = 'Click a segment above for what it does.';
+
+    var vc = {ok:['#0B8A5B','Recommended'], warn:['#E8A317','Legacy \u2014 remove'], bad:['#C1121F','Disable']}[s.verdict[0]];
+    document.getElementById('csverdict').innerHTML =
+      '<span style="color:'+vc[0]+';font-weight:700">'+vc[1]+'</span> &nbsp;\u00B7&nbsp; ' + s.verdict[1];
+    document.getElementById('csverdict').style.borderLeft = '3px solid '+vc[0];
+  }
+
+  document.getElementById('csg').addEventListener('click',function(e){
+    var el=e.target.closest('[data-i]'); if(!el) return;
+    document.querySelectorAll('.csseg').forEach(function(x){ x.setAttribute('fill','#fff'); });
+    el.setAttribute('fill','#FFF8DC');
+    var inf = INFO[el.dataset.i];
+    document.getElementById('csout').innerHTML = '<strong>'+inf[0]+'</strong><br><br>'+inf[1];
+  });
+
+  sel.addEventListener('change',draw);
+  draw();
+})();
+</script>
+
+<script>
+/* ============================================================
+   The library manifest: every course, every chapter.
+   Add a chapter here and it appears in the side nav, the course
+   landing page, search, progress and prev/next navigation.
+
+   xref: [{course, n, why}]  declares a cross-course link.
+   ============================================================ */
+window.LIBRARY = {
+  title: "Field Notes",
+  tagline: "Interactive courses on the systems underneath everything.",
+
+  courses: [
+    /* ---------------------------------------------------------- */
+    {
+      id: "the-wire",
+      slug: "the-wire",
+      title: "The Wire",
+      subtitle: "Security \u00B7 Crypto \u00B7 TLS",
+      hero: "Everything between saying it and being believed",
+      blurb: "Computer security, cryptography, certificates and TLS, taught in dependency order. Each chapter's answer becomes the next chapter's question.",
+      parts: [
+        { id:"I",   name:"Foundations",              range:[1,2] },
+        { id:"II",  name:"Cryptographic primitives", range:[3,7] },
+        { id:"III", name:"Identity and trust",       range:[8,11] },
+        { id:"IV",  name:"TLS on the wire",          range:[12,17] },
+        { id:"V",   name:"Applied and operational",  range:[18,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-what-security-means.html", title:"What security actually means",
+          desc:"CIA triad, threat models, attacker capability classes, trust boundaries, defence in depth.",
+          keys:"cia confidentiality integrity availability threat model dolev-yao trust boundary kerckhoffs" },
+        { n:2, file:"02-adversary-toolkit.html", title:"The adversary's toolkit",
+          desc:"Where an attacker can stand and what that position buys them. Passive, active, MITM, replay, downgrade.",
+          keys:"mitm eavesdrop replay downgrade arp spoofing bgp hijack rogue ap side channel" },
+        { n:3, file:"03-hashing-integrity.html", title:"Hashing and integrity",
+          desc:"Preimage and collision resistance, SHA-2/3, the avalanche effect, HMAC, length extension.",
+          keys:"hash sha256 sha3 md5 collision preimage avalanche hmac length extension argon2" },
+        { n:4, file:"04-symmetric-encryption.html", title:"Symmetric encryption",
+          desc:"AES internals, block vs stream, ECB/CBC/CTR/GCM, IVs and nonces, AEAD and why it exists.",
+          keys:"aes symmetric block cipher ecb cbc ctr gcm chacha20 poly1305 aead iv nonce padding oracle" },
+        { n:5, file:"05-asymmetric-encryption.html", title:"Asymmetric encryption",
+          desc:"RSA and elliptic curves, what each half of a key pair can do, OAEP, key sizes that matter.",
+          keys:"rsa public key private key ecc elliptic curve p256 x25519 oaep modulus trapdoor" },
+        { n:6, file:"06-key-exchange.html", title:"Key exchange",
+          desc:"Diffie-Hellman step by step, ECDHE, forward secrecy, and why static RSA key transport died.",
+          keys:"diffie hellman dh ecdhe forward secrecy pfs shared secret discrete log x25519 logjam" },
+        { n:7, file:"07-digital-signatures.html", title:"Digital signatures",
+          desc:"Signing is not backwards encryption. RSA-PSS, ECDSA, Ed25519, and what a signature proves.",
+          keys:"signature sign verify rsa-pss ecdsa ed25519 nonce reuse non-repudiation" },
+        { n:8, file:"08-pki-trust-model.html", title:"The PKI trust model",
+          desc:"Why cryptography alone proves nothing about identity. Roots, intermediates, leaves, path building.",
+          keys:"pki root ca intermediate leaf chain of trust trust store path building cross-signing" },
+        { n:9, file:"09-inside-x509.html", title:"Inside an X.509 certificate",
+          desc:"Every field, byte by byte. DER and ASN.1, SAN vs CN, extensions, key usage, basic constraints.",
+          keys:"x509 asn1 der pem san cn extensions key usage basic constraints serial issuer subject" },
+        { n:10, file:"10-certificate-lifecycle.html", title:"Certificate lifecycle",
+          desc:"CSR to issuance to renewal. DV/OV/EV, ACME and Let's Encrypt, CAA records, private CAs.",
+          keys:"csr acme lets encrypt dv ov ev caa renewal cert-manager private ca issuance",
+          xref:[{course:"kubernetes", n:12, why:"cert-manager and ingress TLS in practice"}] },
+        { n:11, file:"11-revocation-transparency.html", title:"Revocation and transparency",
+          desc:"CRL, OCSP, stapling, must-staple, and Certificate Transparency logs and SCTs.",
+          keys:"crl ocsp stapling must-staple certificate transparency ct log sct revocation merkle" },
+        { n:12, file:"12-tls12-handshake.html", title:"The TLS 1.2 handshake",
+          desc:"Every message in order, with real bytes. ClientHello through Finished, and why each exists.",
+          keys:"tls 1.2 handshake clienthello serverhello certificate serverkeyexchange finished prf" },
+        { n:13, file:"13-tls13-handshake.html", title:"The TLS 1.3 handshake",
+          desc:"1-RTT and 0-RTT, the HKDF key schedule, and everything RFC 8446 deleted on purpose.",
+          keys:"tls 1.3 rfc8446 1-rtt 0-rtt early data hkdf key schedule helloretryrequest" },
+        { n:14, file:"14-cipher-suites.html", title:"Cipher suites decoded",
+          desc:"Reading a suite string, negotiation rules, ALPN, SNI, and Encrypted Client Hello.",
+          keys:"cipher suite negotiation alpn sni ech esni grease tls_aes_128_gcm_sha256" },
+        { n:15, file:"15-after-the-handshake.html", title:"After the handshake",
+          desc:"The record layer, sequence numbers, session resumption and tickets, rekeying, close_notify.",
+          keys:"record layer session resumption ticket psk rekey key update close_notify" },
+        { n:16, file:"16-mtls.html", title:"Mutual TLS",
+          desc:"Client certificates end to end: CertificateRequest, verification, and where mTLS belongs.",
+          keys:"mtls mutual tls client certificate certificaterequest certificateverify spiffe",
+          xref:[{course:"kubernetes", n:10, why:"service mesh mTLS between pods"}] },
+        { n:17, file:"17-when-tls-breaks.html", title:"When TLS breaks",
+          desc:"Decoding real errors, plus BEAST, CRIME, POODLE, Heartbleed, Logjam and downgrade attacks.",
+          keys:"error expired self-signed hostname mismatch unknown_ca beast crime poodle heartbleed" },
+        { n:18, file:"18-web-app-security.html", title:"Web application security",
+          desc:"OWASP Top 10 in practice: XSS, CSRF, SQLi, SSRF, plus HSTS, CSP, CORS and cookie flags.",
+          keys:"owasp xss csrf sqli ssrf hsts csp cors samesite httponly subresource integrity" },
+        { n:19, file:"19-authn-authz.html", title:"Authentication and authorization",
+          desc:"Password storage, MFA, sessions vs tokens, JWT pitfalls, OAuth 2.0, OIDC and SAML.",
+          keys:"authentication authorization argon2 bcrypt mfa totp webauthn passkey jwt oauth oidc saml rbac",
+          xref:[{course:"kubernetes", n:20, why:"how RBAC and bound service account tokens apply this"}] },
+        { n:20, file:"20-network-security.html", title:"Network security",
+          desc:"TCP/IP and where security attaches, firewalls, IPsec and WireGuard, DNSSEC, DoH/DoT, Zero Trust.",
+          keys:"tcp ip firewall vpn ipsec wireguard dns dnssec doh dot zero trust segmentation",
+          xref:[{course:"linux", n:15, why:"netfilter hooks and conntrack, where the rules actually run"}] },
+        { n:21, file:"21-secrets-key-management.html", title:"Secrets and key management",
+          desc:"HSMs, KMS, envelope encryption, rotation strategy, and keeping secrets out of CI/CD.",
+          keys:"hsm kms envelope encryption dek kek rotation vault sealed secrets secret scanning",
+          xref:[{course:"kubernetes", n:17, why:"why Kubernetes Secrets are not secret"}] },
+        { n:22, file:"22-cloud-kubernetes.html", title:"Security in cloud and Kubernetes",
+          desc:"TLS at ingress, service mesh mTLS, cert-manager, workload identity, network policy, pod hardening.",
+          keys:"kubernetes ingress service mesh istio linkerd cert-manager workload identity network policy",
+          xref:[{course:"kubernetes", n:13, why:"how network policy is actually enforced"},
+                {course:"linux", n:11, why:"capabilities, seccomp and LSMs underneath pod security"}] },
+        { n:23, file:"23-post-quantum.html", title:"Post-quantum and what comes next",
+          desc:"Shor and Grover, ML-KEM and ML-DSA, hybrid key exchange, harvest-now-decrypt-later.",
+          keys:"post quantum shor grover ml-kem kyber ml-dsa dilithium hybrid harvest now decrypt later" },
+        { n:24, file:"24-putting-it-together.html", title:"Putting it all together",
+          desc:"Capstone: one HTTPS request from keystroke to rendered page, every layer visible at once.",
+          keys:"capstone end to end https request dns tcp tls http rendering full path" }
+      ],
+      appendix: [
+        { file:"appendix-glossary.html", title:"Glossary", desc:"Every term used in the course, defined once.", soon:true },
+        { file:"appendix-openssl.html", title:"OpenSSL cheat sheet", desc:"The commands worth memorising, grouped by task.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "kubernetes",
+      slug: "kubernetes",
+      title: "Inside Out",
+      subtitle: "Kubernetes internals",
+      hero: "What actually happens when you type kubectl apply",
+      blurb: "Kubernetes as a set of cooperating control loops rather than a pile of YAML. Vendor-neutral throughout, from the API server request path to a packet reaching your pod.",
+      parts: [
+        { id:"I",   name:"The model",              range:[1,4] },
+        { id:"II",  name:"Scheduling and lifecycle", range:[5,8] },
+        { id:"III", name:"Networking",             range:[9,13] },
+        { id:"IV",  name:"Storage and state",      range:[14,15] },
+        { id:"V",   name:"Workloads",              range:[16,19] },
+        { id:"VI",  name:"Operating it",           range:[20,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-declarative-reconciliation.html", title:"Declarative reconciliation", soon:true,
+          desc:"Desired state, observed state, and the control loop that closes the gap. The one idea the rest of the system is built from.",
+          keys:"declarative imperative reconciliation control loop desired state observed state level triggered idempotent" },
+        { n:2, file:"02-api-server.html", title:"The API server", soon:true,
+          desc:"Groups, versions and kinds, spec and status, and the full request path: authentication, authorization, admission, validation, storage.",
+          keys:"api server gvk gvr spec status request path authentication authorization admission validation openapi",
+          xref:[{course:"the-wire", n:16, why:"the mTLS that authenticates every component to the API server"}] },
+        { n:3, file:"03-etcd.html", title:"etcd", soon:true,
+          desc:"Raft consensus, the revision model, watches, leases and compaction. Why cluster state is a single consistent log.",
+          keys:"etcd raft consensus quorum revision watch lease compaction defrag backup restore" },
+        { n:4, file:"04-controllers-informers.html", title:"Controllers and informers", soon:true,
+          desc:"The shared informer cache, work queues, resync, and why level-triggered logic survives missed events.",
+          keys:"controller informer lister workqueue resync level triggered edge triggered controller-runtime" },
+        { n:5, file:"05-scheduler.html", title:"The scheduler", soon:true,
+          desc:"Filter and score, node affinity, taints and tolerations, topology spread, and preemption.",
+          keys:"scheduler filter score predicate priority affinity anti-affinity taint toleration topology spread preemption" },
+        { n:6, file:"06-pod-lifecycle.html", title:"Pod lifecycle", soon:true,
+          desc:"Phases and conditions, init and sidecar containers, the three probe types, and graceful termination.",
+          keys:"pod lifecycle phase condition init container sidecar liveness readiness startup probe prestop sigterm grace period",
+          xref:[{course:"linux", n:13, why:"what SIGTERM and SIGKILL actually do to a process"}] },
+        { n:7, file:"07-kubelet.html", title:"The kubelet", soon:true,
+          desc:"The node agent's sync loop, PLEG, node status and heartbeats, and eviction under pressure.",
+          keys:"kubelet sync loop pleg node status heartbeat lease eviction pressure static pod cadvisor" },
+        { n:8, file:"08-container-runtime.html", title:"Container runtimes", soon:true,
+          desc:"CRI, containerd and runc, the OCI image and runtime specs, image pull and snapshotters.",
+          keys:"cri containerd runc oci image spec runtime spec snapshotter overlayfs registry pull",
+          xref:[{course:"linux", n:12, why:"build the same isolation by hand in fifty lines"}] },
+        { n:9, file:"09-network-model.html", title:"The network model", soon:true,
+          desc:"The flat addressing rules every CNI must satisfy, pod-to-pod paths, overlays versus native routing.",
+          keys:"cni network model flat addressing pod cidr overlay vxlan native routing veth bridge" },
+        { n:10, file:"10-services-kube-proxy.html", title:"Services and kube-proxy", soon:true,
+          desc:"ClusterIP as a fiction maintained by rules. iptables versus IPVS, EndpointSlices, session affinity.",
+          keys:"service clusterip nodeport loadbalancer kube-proxy iptables ipvs endpointslice dnat session affinity",
+          xref:[{course:"linux", n:15, why:"the netfilter chains those rules are written into"}] },
+        { n:11, file:"11-coredns.html", title:"DNS and service discovery", soon:true,
+          desc:"CoreDNS, the search domain list, and the ndots setting that quietly multiplies your query volume.",
+          keys:"coredns dns service discovery search domain ndots resolv.conf headless srv record" },
+        { n:12, file:"12-ingress-gateway.html", title:"Ingress and Gateway API", soon:true,
+          desc:"Ingress controllers, TLS termination, path and host routing, and what Gateway API changes.",
+          keys:"ingress controller gateway api httproute tls termination sni path routing cert-manager",
+          xref:[{course:"the-wire", n:10, why:"how those certificates are issued and renewed"}] },
+        { n:13, file:"13-network-policy.html", title:"Network policy", soon:true,
+          desc:"Default-allow is the starting point. Ingress and egress selectors, and how a CNI enforces them.",
+          keys:"network policy default allow deny ingress egress podselector namespaceselector cilium calico ebpf",
+          xref:[{course:"the-wire", n:22, why:"where this sits in a defence-in-depth design"}] },
+        { n:14, file:"14-storage-csi.html", title:"Volumes, PVs and CSI", soon:true,
+          desc:"The PV/PVC binding dance, StorageClasses and dynamic provisioning, CSI attach, mount and detach.",
+          keys:"volume persistentvolume persistentvolumeclaim storageclass dynamic provisioning csi attach mount reclaim policy",
+          xref:[{course:"linux", n:6, why:"what mounting actually does to a namespace"}] },
+        { n:15, file:"15-statefulsets.html", title:"StatefulSets", soon:true,
+          desc:"Stable identity, ordered rollout, headless services and per-replica volume claims.",
+          keys:"statefulset stable identity ordinal headless service pvc template ordered rollout partition" },
+        { n:16, file:"16-deployments-rollouts.html", title:"Deployments and rollouts", soon:true,
+          desc:"ReplicaSet mechanics, maxSurge and maxUnavailable, revision history, rollback and stuck rollouts.",
+          keys:"deployment replicaset rollout maxsurge maxunavailable revision history rollback progress deadline recreate" },
+        { n:17, file:"17-config-secrets.html", title:"ConfigMaps and Secrets", soon:true,
+          desc:"Projection into env and volumes, update propagation delay, immutability, and why Secrets are only base64.",
+          keys:"configmap secret projected volume env update propagation immutable base64 encryption at rest sealed secrets external secrets",
+          xref:[{course:"the-wire", n:21, why:"envelope encryption and doing this properly"}] },
+        { n:18, file:"18-resources-qos.html", title:"Requests, limits and QoS", soon:true,
+          desc:"How requests drive scheduling and limits drive enforcement. Guaranteed, Burstable, BestEffort, throttling and OOMKill.",
+          keys:"requests limits qos guaranteed burstable besteffort cpu throttling cfs quota oomkill memory pressure",
+          xref:[{course:"linux", n:10, why:"cgroups v2 is what enforces every one of these numbers"},
+                {course:"linux", n:5,  why:"how the OOM killer chooses its victim"}] },
+        { n:19, file:"19-autoscaling.html", title:"Autoscaling", soon:true,
+          desc:"The HPA algorithm and its stabilisation windows, VPA's conflict with it, and node autoscaling.",
+          keys:"hpa vpa cluster autoscaler karpenter metrics server custom metrics stabilisation scale to zero keda" },
+        { n:20, file:"20-rbac-identity.html", title:"RBAC and workload identity", soon:true,
+          desc:"Subjects, verbs and resources, role aggregation, service accounts and bound projected tokens.",
+          keys:"rbac role clusterrole binding subject verb service account bound token projected oidc workload identity impersonation",
+          xref:[{course:"the-wire", n:19, why:"the token and federation model underneath"}] },
+        { n:21, file:"21-admission-control.html", title:"Admission control", soon:true,
+          desc:"Mutating and validating webhooks, ordering, failure policy, and CEL-based policy without a webhook.",
+          keys:"admission webhook mutating validating failurepolicy cel validatingadmissionpolicy opa gatekeeper kyverno pod security admission" },
+        { n:22, file:"22-crds-operators.html", title:"CRDs and operators", soon:true,
+          desc:"Extending the API, owner references and garbage collection, finalizers, and the operator pattern.",
+          keys:"crd custom resource operator finalizer owner reference garbage collection status subresource conversion webhook" },
+        { n:23, file:"23-debugging.html", title:"Debugging by symptom", soon:true,
+          desc:"A decision tree from the error you actually see: Pending, CrashLoopBackOff, ImagePullBackOff, OOMKilled, DNS failures.",
+          keys:"debugging pending crashloopbackoff imagepullbackoff oomkilled evicted dns failure events describe ephemeral container" },
+        { n:24, file:"24-capstone.html", title:"Capstone: apply to answer", soon:true,
+          desc:"One manifest from kubectl to a packet arriving at a container, with every component visible at once.",
+          keys:"capstone end to end kubectl apply full path request lifecycle" }
+      ],
+      appendix: [
+        { file:"appendix-kubectl.html", title:"kubectl field guide", desc:"The commands and jsonpath queries worth memorising.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "linux",
+      slug: "linux",
+      title: "Under the Hood",
+      subtitle: "Linux internals",
+      hero: "The machine your abstractions are standing on",
+      blurb: "Processes, memory, filesystems and isolation, from the syscall boundary down. Part III is the foundation every container runtime is built from.",
+      parts: [
+        { id:"I",   name:"Foundations",          range:[1,5] },
+        { id:"II",  name:"I/O and filesystems",  range:[6,8] },
+        { id:"III", name:"Isolation",            range:[9,12] },
+        { id:"IV",  name:"Communication",        range:[13,15] },
+        { id:"V",   name:"Runtime and observability", range:[16,20] }
+      ],
+      chapters: [
+        { n:1, file:"01-kernel-boundary.html", title:"The kernel boundary", soon:true,
+          desc:"User space and kernel space, the syscall mechanism, the stable ABI, and reading a trace.",
+          keys:"syscall kernel user space ring privilege abi vdso strace errno context switch" },
+        { n:2, file:"02-processes.html", title:"Processes", soon:true,
+          desc:"task_struct, fork and exec and exit, PIDs and PPIDs, orphans and zombies, the process tree.",
+          keys:"process task_struct fork exec exit clone pid ppid zombie orphan reaping wait exit status" },
+        { n:3, file:"03-scheduler.html", title:"The scheduler", soon:true,
+          desc:"CFS and its EEVDF successor, virtual runtime, nice and weights, preemption and load average.",
+          keys:"scheduler cfs eevdf vruntime nice weight runqueue preemption load average cpu affinity latency" },
+        { n:4, file:"04-virtual-memory.html", title:"Virtual memory", soon:true,
+          desc:"Address translation level by level, page tables and the TLB, mmap, demand paging and copy-on-write.",
+          keys:"virtual memory page table tlb mmu address translation page fault demand paging copy on write huge pages rss vsz" },
+        { n:5, file:"05-memory-pressure.html", title:"Memory pressure", soon:true,
+          desc:"The page cache, dirty writeback, swap and reclaim, and exactly how the OOM killer picks a victim.",
+          keys:"page cache dirty writeback swap swappiness reclaim kswapd oom killer oom_score_adj psi memory pressure",
+          xref:[{course:"kubernetes", n:18, why:"how Kubernetes exposes these as limits and QoS"}] },
+        { n:6, file:"06-files-descriptors.html", title:"Files and descriptors", soon:true,
+          desc:"The VFS, inodes and dentries, the three-table model of open files, and what fork actually shares.",
+          keys:"vfs inode dentry file descriptor open file table fork share offset dup redirect mount namespace" },
+        { n:7, file:"07-filesystems.html", title:"Filesystems", soon:true,
+          desc:"Journaling, extents and allocation, and precisely what fsync does and does not promise.",
+          keys:"ext4 xfs btrfs journaling extent allocation fsync fdatasync durability barrier overlayfs tmpfs" },
+        { n:8, file:"08-block-io.html", title:"The block layer and modern I/O", soon:true,
+          desc:"Request queues and I/O schedulers, and the real difference between blocking, epoll and io_uring.",
+          keys:"block layer bio request queue scheduler mq-deadline none blocking nonblocking epoll io_uring direct io readahead" },
+        { n:9, file:"09-namespaces.html", title:"Namespaces", soon:true,
+          desc:"All seven namespace types, entering and creating them by hand, and how a PID looks different from inside.",
+          keys:"namespace pid mount network uts ipc user cgroup unshare nsenter setns clone flags rootless" },
+        { n:10, file:"10-cgroups.html", title:"cgroups v2", soon:true,
+          desc:"The unified hierarchy, cpu.max throttling, memory.high versus memory.max, and pressure stall information.",
+          keys:"cgroup v2 unified hierarchy controller cpu.max cpu.weight memory.high memory.max io.max psi throttling delegation",
+          xref:[{course:"kubernetes", n:18, why:"the requests and limits that write these files"}] },
+        { n:11, file:"11-capabilities-seccomp.html", title:"Capabilities, seccomp and LSMs", soon:true,
+          desc:"Splitting root into capabilities, filtering syscalls with BPF, and where SELinux and AppArmor sit.",
+          keys:"capabilities cap_net_bind setuid no_new_privs seccomp bpf filter selinux apparmor lsm privileged container",
+          xref:[{course:"the-wire", n:22, why:"pod hardening built on exactly these primitives"}] },
+        { n:12, file:"12-container-from-scratch.html", title:"Build a container from scratch", soon:true,
+          desc:"pivot_root plus namespaces plus cgroups plus seccomp, in about fifty lines. No runtime involved.",
+          keys:"container from scratch chroot pivot_root namespace cgroup seccomp rootfs overlay runc oci",
+          xref:[{course:"kubernetes", n:8, why:"what containerd and runc do with all of this"}] },
+        { n:13, file:"13-signals.html", title:"Signals", soon:true,
+          desc:"Delivery and handlers, async-signal-safety, SIGTERM versus SIGKILL, process groups and PID 1's special role.",
+          keys:"signal sigterm sigkill sighup sigchld handler async signal safe process group session pid 1 init zombie reaping",
+          xref:[{course:"kubernetes", n:6, why:"why your pod ignores SIGTERM and gets killed after 30 seconds"}] },
+        { n:14, file:"14-ipc.html", title:"Inter-process communication", soon:true,
+          desc:"Pipes and their buffer, unix domain sockets and fd passing, shared memory, eventfd and futexes.",
+          keys:"ipc pipe fifo unix domain socket scm_rights fd passing shared memory shm eventfd futex mutex message queue" },
+        { n:15, file:"15-network-stack.html", title:"The network stack", soon:true,
+          desc:"From socket write to NIC, the sk_buff, netfilter hook points, conntrack and where iptables rules run.",
+          keys:"socket sk_buff netfilter hook prerouting postrouting nat conntrack iptables nftables tc qdisc napi rss",
+          xref:[{course:"kubernetes", n:10, why:"kube-proxy writes rules into these exact chains"},
+                {course:"the-wire", n:20, why:"where firewalling and segmentation attach"}] },
+        { n:16, file:"16-elf-linking.html", title:"ELF, linking and loading", soon:true,
+          desc:"Sections and segments, static versus dynamic linking, the dynamic linker, PLT and GOT, LD_PRELOAD.",
+          keys:"elf section segment static dynamic linking ld.so plt got relocation symbol ld_preload rpath strip" },
+        { n:17, file:"17-proc-sys.html", title:"/proc and /sys", soon:true,
+          desc:"Where every monitoring tool gets its numbers, and how to read them without a tool at all.",
+          keys:"proc sys procfs sysfs pid status maps fd smaps stat meminfo cgroup sysctl top ps monitoring" },
+        { n:18, file:"18-ebpf.html", title:"eBPF", soon:true,
+          desc:"The verifier, maps, program types and attach points, plus bpftrace one-liners worth keeping.",
+          keys:"ebpf bpf verifier map kprobe uprobe tracepoint xdp tc bpftrace bcc observability cilium" },
+        { n:19, file:"19-performance.html", title:"Performance methodology", soon:true,
+          desc:"The USE method, flame graphs, perf, and telling a latency problem from a throughput problem.",
+          keys:"performance use method utilisation saturation errors flame graph perf latency throughput percentile off-cpu" },
+        { n:20, file:"20-boot.html", title:"Boot", soon:true,
+          desc:"Firmware to bootloader to kernel to initramfs to PID 1, and what systemd does with the units it finds.",
+          keys:"boot uefi bios grub kernel initramfs pid 1 systemd unit target dependency cgroup slice journald" }
+      ],
+      appendix: [
+        { file:"appendix-commands.html", title:"Command reference", desc:"The diagnostic commands worth memorising, grouped by subsystem.", soon:true }
+      ]
+    }
+  ]
+};
+
+/* Resolve the course this page belongs to. Pages set window.COURSE_ID. */
+window.getCourse = function (id) {
+  id = id || window.COURSE_ID;
+  return LIBRARY.courses.filter(function (c) { return c.id === id; })[0] || null;
+};
+
+</script>
+<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>
+/* Shared behaviour for every page in the library.
+   Pages declare where they are with:
+     window.COURSE_ID  = "linux"            (course landing and chapters)
+     document.body.dataset.chapter = "10"   (chapter pages only)
+     window.DEPTH      = 0 | 1 | 2          (folders below the library root)
+*/
+(function () {
+  'use strict';
+
+  var DEPTH = (typeof window.DEPTH === 'number') ? window.DEPTH : 0;
+  var UP = new Array(DEPTH + 1).join('../');
+
+  /* ---------- progress, namespaced per course ---------- */
+  var mem = {};
+  function key(cid) { return 'library.progress.' + cid + '.v1'; }
+  function read(cid) { try { return JSON.parse(localStorage.getItem(key(cid))) || {}; } catch (e) { return mem[cid] || {}; } }
+  function save(cid, o) { mem[cid] = o; try { localStorage.setItem(key(cid), JSON.stringify(o)); } catch (e) {} }
+
+  window.Progress = {
+    all:    function (cid) { return read(cid || window.COURSE_ID); },
+    isDone: function (n, cid) { return !!read(cid || window.COURSE_ID)[n]; },
+    set:    function (n, v, cid) {
+      cid = cid || window.COURSE_ID;
+      var o = read(cid); if (v) o[n] = 1; else delete o[n]; save(cid, o);
+    },
+    reset:  function (cid) { save(cid || window.COURSE_ID, {}); },
+    count:  function (cid) { return Object.keys(read(cid)).length; }
+  };
+
+  /* ---------- lab copy buttons ---------- */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-copy]');
+    if (!b) return;
+    var txt = b.closest('.lab').querySelector('pre').innerText;
+    var done = function () { var o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1400); };
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).then(done, done);
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+
+  /* ---------- quiz ---------- */
+  document.addEventListener('click', function (e) {
+    var opt = e.target.closest('.opt');
+    if (!opt) return;
+    var q = opt.closest('.q');
+    if (q.dataset.answered) return;
+    q.dataset.answered = '1';
+    var opts = Array.prototype.slice.call(q.querySelectorAll('.opt'));
+    var right = parseInt(q.dataset.answer, 10);
+    opts.forEach(function (o, i) { if (i === right) o.classList.add('right'); });
+    if (opts.indexOf(opt) !== right) opt.classList.add('wrong');
+    var why = q.querySelector('.why');
+    if (why) why.classList.add('show');
+  });
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  /* ---------- side navigation ---------- */
+  function buildNav() {
+    var host = document.getElementById('side');
+    if (!host || !window.LIBRARY) return;
+
+    var course = window.getCourse();
+    if (!course) return;
+
+    var cur = parseInt(document.body.dataset.chapter, 10) || 0;
+    var inChapters = !!document.body.dataset.chapter;
+    var chPre = inChapters ? '' : 'chapters/';
+    var courseHome = inChapters ? '../index.html' : 'index.html';
+
+    var switcher = LIBRARY.courses.map(function (c) {
+      var href = UP + c.slug + '/index.html';
+      return '<a class="cswitch' + (c.id === course.id ? ' on' : '') + '" href="' + href + '">' +
+             '<span class="cs-t">' + c.title + '</span>' +
+             '<span class="cs-s">' + c.subtitle + '</span></a>';
+    }).join('');
+
+    host.innerHTML =
+      '<a class="liblink" href="' + UP + 'index.html">&larr; ' + LIBRARY.title + '</a>' +
+      '<a class="brand" href="' + courseHome + '">' +
+        '<span class="bt">' + course.title + '</span>' +
+        '<span class="bs">' + course.subtitle + '</span></a>' +
+      '<button class="navtoggle" id="navtoggle">Contents &amp; search</button>' +
+      '<div class="navbody" id="navbody">' +
+        '<div class="cswitchwrap">' + switcher + '</div>' +
+        '<div class="navsearch"><span class="gl">&#9906;</span>' +
+          '<input id="navq" type="search" placeholder="Search this course" autocomplete="off"></div>' +
+        '<div class="navprog"><div class="bar"><div class="fill" id="navfill"></div></div>' +
+          '<div class="txt"><span id="navpt"></span><button id="navreset">Reset</button></div></div>' +
+        '<div id="navlists"></div>' +
+      '</div>';
+
+    var qEl = host.querySelector('#navq');
+
+    function renderLists() {
+      var f = qEl.value.trim().toLowerCase(), html = '', shown = 0;
+
+      course.parts.forEach(function (p) {
+        var chs = course.chapters.filter(function (c) {
+          if (c.n < p.range[0] || c.n > p.range[1]) return false;
+          if (!f) return true;
+          return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
+        });
+        if (!chs.length) return;
+        shown += chs.length;
+        html += '<p class="navpart">' + p.id + ' &middot; ' + p.name + '</p><ul class="navlist">';
+        chs.forEach(function (c) {
+          var cls = 'navlink' + (c.n === cur ? ' here' : '') +
+            (Progress.isDone(c.n, course.id) ? ' is-done' : '') + (c.soon ? ' is-soon' : '');
+          var inner = '<span class="nn">' + pad(c.n) + '</span><span>' + c.title + '</span>';
+          html += '<li>' + (c.soon ? '<span class="' + cls + '">' + inner + '</span>'
+                                   : '<a class="' + cls + '" href="' + chPre + c.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      });
+
+      var apx = (course.appendix || []).filter(function (a) {
+        return !f || (a.title + ' ' + a.desc).toLowerCase().indexOf(f) > -1;
+      });
+      if (apx.length) {
+        shown += apx.length;
+        html += '<p class="navpart">Appendix</p><ul class="navlist">';
+        apx.forEach(function (a) {
+          var inner = '<span class="nn">&mdash;</span><span>' + a.title + '</span>';
+          html += '<li>' + (a.soon ? '<span class="navlink is-soon">' + inner + '</span>'
+                                   : '<a class="navlink" href="' + chPre + a.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      }
+
+      if (!shown) html = '<p class="navempty">No chapter in this course matches. Search covers titles, summaries and keywords.</p>';
+      host.querySelector('#navlists').innerHTML = html;
+
+      var here = host.querySelector('.navlink.here');
+      if (here && !f) {
+        var top = here.offsetTop - host.clientHeight / 2;
+        if (top > 0) host.scrollTop = top;
+      }
+      if (typeof window.onCourseFilter === 'function') window.onCourseFilter(f);
+    }
+
+    function renderProgress() {
+      var n = Progress.count(course.id), t = course.chapters.length;
+      host.querySelector('#navfill').style.width = (n / t * 100) + '%';
+      host.querySelector('#navpt').textContent = n + ' / ' + t + ' complete';
+    }
+
+    qEl.addEventListener('input', renderLists);
+    host.querySelector('#navreset').addEventListener('click', function () {
+      Progress.reset(course.id); renderLists(); renderProgress();
+    });
+    host.querySelector('#navtoggle').addEventListener('click', function () {
+      host.querySelector('#navbody').classList.toggle('open');
+    });
+
+    window.refreshCourseNav = function () { renderLists(); renderProgress(); };
+    renderLists(); renderProgress();
+  }
+
+  /* ---------- chapter prev/next and completion ---------- */
+  function chapterChrome() {
+    var n = parseInt(document.body.dataset.chapter, 10);
+    var course = window.getCourse && window.getCourse();
+    if (!n || !course) return;
+
+    var chs = course.chapters;
+    var i = chs.findIndex(function (c) { return c.n === n; });
+    var prev = chs[i - 1], next = chs[i + 1], cur = chs[i];
+
+    function link(c, dir) {
+      if (!c) return '<span></span>';
+      var label = (dir === 'prev' ? '\u2190 ' : '') + pad(c.n) + ' \u00B7 ' + c.title + (dir === 'next' ? ' \u2192' : '');
+      return c.soon ? '<span style="opacity:.45">' + label + '</span>'
+                    : '<a href="' + c.file + '">' + label + '</a>';
+    }
+
+    var top = document.querySelector('.chapnav');
+    if (top) top.innerHTML = link(prev, 'prev') + '<a href="../index.html">All chapters</a>' + link(next, 'next');
+
+    var foot = document.querySelector('.chapfoot');
+    if (foot) foot.innerHTML = link(prev, 'prev') + link(next, 'next');
+
+    var db = document.querySelector('.donebar');
+    if (db) {
+      db.innerHTML = '<label><input type="checkbox" id="doneck"> Mark chapter ' + n + ', ' + cur.title + ', as complete</label>';
+      var ck = db.querySelector('#doneck');
+      ck.checked = Progress.isDone(n, course.id);
+      ck.addEventListener('change', function () {
+        Progress.set(n, ck.checked, course.id);
+        if (window.refreshCourseNav) window.refreshCourseNav();
+      });
+    }
+  }
+
+  /* ---------- cross-course reference rendering ---------- */
+  window.xrefHTML = function (c, fromCourseId) {
+    if (!c.xref || !c.xref.length) return '';
+    return '<span class="xrefs">' + c.xref.map(function (x) {
+      var tc = window.getCourse(x.course);
+      if (!tc) return '';
+      var tch = tc.chapters.filter(function (y) { return y.n === x.n; })[0];
+      if (!tch) return '';
+      var href = UP + tc.slug + '/chapters/' + tch.file;
+      var label = tc.subtitle + ' \u00B7 ' + pad(x.n) + ' ' + tch.title;
+      return '<span class="xref">' + (tch.soon
+        ? '<span class="xr-dead">' + label + '</span>'
+        : '<a href="' + href + '">' + label + '</a>') +
+        '<span class="xr-why">' + x.why + '</span></span>';
+    }).join('') + '</span>';
+  };
+
+  function init() { buildNav(); chapterChrome(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>18 · Web application security — The Wire</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root{
+  --paper:#FBFBF7;
+  --paper-2:#F2F2EA;
+  --ink:#14161A;
+  --ink-soft:#4A4F58;
+  --rule:#DCDDD4;
+  --client:#1B4FD8;
+  --server:#D6006E;
+  --ok:#0B8A5B;
+  --warn:#E8A317;
+  --bad:#C1121F;
+  --display:'Space Grotesk',system-ui,sans-serif;
+  --body:'Source Serif 4',Georgia,serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --nav-w:296px;
+  --measure:78ch;
+}
+
+.course-the-wire  { --client:#1B4FD8; --server:#D6006E; }
+.course-kubernetes{ --client:#0F6E8C; --server:#E2622A; }
+.course-linux     { --client:#5C3D99; --server:#C48A16; }
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--body);font-size:18px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wire-rail{
+  height:3px;width:100%;position:fixed;top:0;left:0;z-index:80;
+  background:linear-gradient(90deg,var(--client) 0%,var(--client) 40%,var(--server) 60%,var(--server) 100%);
+}
+
+/* ============ two-column shell ============ */
+.layout{display:grid;grid-template-columns:var(--nav-w) minmax(0,1fr);align-items:start}
+
+.sidenav{
+  position:sticky;top:0;height:100vh;overflow-y:auto;overscroll-behavior:contain;
+  border-right:1px solid var(--rule);background:var(--paper-2);
+  padding:26px 22px 40px;
+}
+.sidenav::-webkit-scrollbar{width:8px}
+.sidenav::-webkit-scrollbar-thumb{background:#cfd0c6;border-radius:99px}
+
+.content{padding:48px 56px 110px;min-width:0}
+.col{max-width:var(--measure)}
+
+/* ============ side nav internals ============ */
+.brand{display:block;text-decoration:none;color:inherit;margin-bottom:4px}
+.brand .bt{font-family:var(--display);font-weight:700;font-size:1.32rem;letter-spacing:-.02em;line-height:1.1}
+.brand .bs{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-top:5px}
+.brand:hover .bt{color:var(--client)}
+
+.navsearch{
+  display:flex;align-items:center;gap:8px;margin:20px 0 16px;
+  border:1.5px solid var(--rule);background:#fff;padding:8px 10px;border-radius:2px;
+}
+.navsearch:focus-within{border-color:var(--ink)}
+.navsearch input{border:0;outline:0;background:transparent;width:100%;min-width:0;color:var(--ink);font:400 12.5px/1.4 var(--mono)}
+.navsearch .gl{font-size:12px;color:var(--ink-soft)}
+
+.navprog{margin-bottom:22px}
+.navprog .bar{height:5px;background:#e3e4db;border-radius:99px;overflow:hidden}
+.navprog .fill{height:100%;width:0;background:linear-gradient(90deg,var(--client),var(--server));transition:width .35s}
+.navprog .txt{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:7px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.navprog .txt button{font:inherit;background:none;border:0;color:var(--ink-soft);text-decoration:underline;cursor:pointer;padding:0}
+.navprog .txt button:hover{color:var(--bad)}
+
+.navpart{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);
+  margin:22px 0 7px;padding-bottom:5px;border-bottom:1px solid var(--rule);
+}
+.navlist{list-style:none;margin:0;padding:0}
+.navlist li{margin:0}
+.navlink{
+  display:grid;grid-template-columns:22px minmax(0,1fr);gap:9px;align-items:start;
+  padding:6px 8px 6px 6px;margin-left:-6px;border-radius:2px;
+  text-decoration:none;color:var(--ink);
+  font-family:var(--display);font-weight:400;font-size:12.9px;line-height:1.38;
+}
+.navlink:hover{background:#fff}
+.navlink .nn{font-family:var(--mono);font-size:10px;color:var(--ink-soft);padding-top:2px}
+.navlink.here{background:#fff;font-weight:600;box-shadow:inset 2px 0 0 var(--server)}
+.navlink.here .nn{color:var(--server)}
+.navlink.is-done .nn::after{content:" \2713";color:var(--ok)}
+.navlink.is-soon{color:#9a9e96;pointer-events:none}
+.navempty{font-family:var(--mono);font-size:11px;color:var(--ink-soft);padding:14px 0;line-height:1.6}
+
+/* ============ typography ============ */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 16px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(2rem,3.6vw,3.1rem);line-height:1.05;letter-spacing:-.025em;margin:0}
+h2{font-family:var(--display);font-weight:700;font-size:1.6rem;letter-spacing:-.015em;margin:3.2rem 0 .8rem;scroll-margin-top:24px}
+h3{font-family:var(--display);font-weight:500;font-size:1.16rem;margin:2.2rem 0 .5rem}
+p{margin:0 0 1.05em;max-width:var(--measure)}
+a{color:var(--client)}
+ul,ol{max-width:var(--measure);padding-left:1.25em}
+li{margin:.3em 0}
+strong{font-weight:600}
+code{font-family:var(--mono);font-size:.85em;background:var(--paper-2);padding:.12em .38em;border:1px solid var(--rule);border-radius:3px}
+
+header.masthead{padding:0 0 30px;border-bottom:1px solid var(--rule);margin-bottom:40px}
+.lede{font-size:1.16rem;line-height:1.55;color:var(--ink-soft);max-width:68ch;margin:18px 0 0}
+
+/* ============ index page ============ */
+.tocpart{
+  font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft);
+  margin:40px 0 10px;padding-bottom:8px;border-bottom:1px solid var(--rule);max-width:var(--measure);
+}
+.toc{list-style:none;padding:0;margin:0;max-width:var(--measure)}
+.toc li{margin:0}
+.tocitem{
+  display:grid;grid-template-columns:50px minmax(0,1fr) auto;column-gap:16px;align-items:start;
+  padding:14px 12px;border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  transition:background .12s,padding-left .12s;
+}
+.tocitem:hover{background:#fff;padding-left:18px}
+.tocnum{font-family:var(--mono);font-size:12px;color:var(--client);font-weight:700;padding-top:3px}
+.toctitle{display:block;font-family:var(--display);font-weight:600;font-size:1.06rem;line-height:1.3;letter-spacing:-.01em}
+.tocdesc{display:block;font-size:.9rem;color:var(--ink-soft);line-height:1.5;margin-top:5px}
+.tocstate{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;padding-top:5px}
+.tocitem.done{background:#fff}
+.tocitem.done .tocstate{color:var(--ok)}
+.tocitem.done .tocnum::after{content:" \2713";color:var(--ok)}
+.tocitem.soon{opacity:.5}
+
+/* ============ chapter chrome ============ */
+.chapnav{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:0 0 22px;margin-bottom:26px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;max-width:var(--measure)}
+.chapnav a{text-decoration:none;color:var(--ink-soft)}
+.chapnav a:hover{color:var(--client)}
+.chapfoot{display:flex;justify-content:space-between;gap:16px;margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:12.5px;max-width:var(--measure)}
+.donebar{margin:52px 0 0;padding:20px;background:#fff;border:1px solid var(--rule);border-left:3px solid var(--ok);max-width:var(--measure)}
+.donebar label{font-family:var(--mono);font-size:12.5px;display:flex;gap:10px;align-items:center;cursor:pointer;line-height:1.4}
+.donebar input{width:18px;height:18px;accent-color:var(--ok);flex:none}
+
+/* ============ content blocks ============ */
+.callout{border-left:3px solid var(--client);background:#fff;padding:16px 20px;margin:1.8em 0;max-width:var(--measure);font-size:.96rem}
+.callout.warn{border-left-color:var(--warn)}
+.callout.bad{border-left-color:var(--bad)}
+.callout.rfc{border-left-color:var(--ink-soft)}
+.callout .tag{font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px}
+.callout p:last-child{margin-bottom:0}
+
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:#fff;border:1px solid var(--rule);border-top:3px solid var(--ink);padding:16px;overflow-x:auto;margin:1.6em 0;max-width:var(--measure)}
+pre code{background:none;border:0;padding:0;font-size:inherit}
+.lab{margin:1.8em 0;max-width:var(--measure)}
+.lab .labhead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;background:var(--ink);color:var(--paper);padding:7px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.lab .labhead button{font:inherit;background:transparent;border:1px solid rgba(255,255,255,.4);color:var(--paper);padding:3px 8px;cursor:pointer;border-radius:2px}
+.lab .labhead button:hover{background:rgba(255,255,255,.15)}
+.lab pre{margin:0;border-top:0;max-width:none}
+
+table{border-collapse:collapse;width:100%;max-width:var(--measure);margin:1.6em 0;font-size:.9rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+td code{font-size:.84em}
+
+/* ============ interactive frame ============ */
+.demo{border:1px solid var(--rule);background:#fff;margin:2.2em 0;max-width:var(--measure)}
+.demo .demohead{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);padding:9px 16px;border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.demo .demobody{padding:20px}
+.demo .demonote{padding:12px 16px;border-top:1px solid var(--rule);background:var(--paper-2);font-size:.86rem;color:var(--ink-soft);line-height:1.55}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.ctl label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft)}
+.ctl input[type=text],.ctl input[type=number],.ctl select,textarea{font-family:var(--mono);font-size:13px;padding:7px 9px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);border-radius:2px}
+textarea{width:100%;resize:vertical}
+.chip{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink-soft)}
+.chip:hover{border-color:var(--ink)}
+.chip[aria-pressed=true],.chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.out{font-family:var(--mono);font-size:12.5px;word-break:break-word;background:var(--paper-2);border:1px solid var(--rule);padding:12px;line-height:1.7}
+svg{max-width:100%;height:auto;display:block}
+.hexdump{font-family:var(--mono);font-size:12px;line-height:1.8;word-break:break-all}
+.hexdump .hl{background:#FFF0A8;outline:1px solid var(--warn)}
+
+/* ============ quiz ============ */
+.quiz{border:1px solid var(--rule);background:#fff;padding:22px;margin:2.4em 0;max-width:var(--measure)}
+.quiz h3{margin-top:0}
+.q{margin:0 0 22px;padding-bottom:18px;border-bottom:1px dashed var(--rule)}
+.q:last-of-type{border-bottom:0;padding-bottom:0}
+.q p.qtext{font-weight:600;margin-bottom:10px}
+.opts{display:flex;flex-direction:column;gap:7px}
+.opt{text-align:left;font-family:var(--body);font-size:.95rem;line-height:1.45;padding:9px 13px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;border-radius:2px;color:var(--ink)}
+.opt:hover{border-color:var(--ink)}
+.opt.right{border-color:var(--ok);background:#E8F6F0;box-shadow:inset 3px 0 0 var(--ok)}
+.opt.wrong{border-color:var(--bad);background:#FBEAEA;box-shadow:inset 3px 0 0 var(--bad)}
+.why{font-size:.88rem;color:var(--ink-soft);margin-top:9px;display:none;border-left:2px solid var(--rule);padding-left:12px}
+.why.show{display:block}
+
+/* ============ responsive ============ */
+.navtoggle{
+  display:none;width:100%;text-align:left;margin-top:14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  background:#fff;border:1px solid var(--rule);color:var(--ink-soft);padding:9px 12px;cursor:pointer;border-radius:2px;
+}
+
+@media (max-width:1240px){ :root{--nav-w:258px} .content{padding:44px 40px 100px} }
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr}
+  .sidenav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--rule);padding:22px 20px 24px}
+  .navtoggle{display:block}
+  .navbody{display:none;margin-top:16px}
+  .navbody.open{display:block}
+  .content{padding:32px 20px 80px}
+  body{font-size:17px}
+  .tocitem{grid-template-columns:38px minmax(0,1fr);column-gap:10px}
+  .tocstate{display:none}
+  .chapnav,.chapfoot{flex-direction:column;align-items:flex-start;gap:8px}
+}
+
+
+
+/* ============ library landing ============ */
+.libwrap{max-width:1000px;margin:0 auto;padding:74px 40px 110px}
+.libhead{border-bottom:1px solid var(--rule);padding-bottom:34px;margin-bottom:12px}
+.libhead h1{font-size:clamp(2.2rem,4.4vw,3.5rem)}
+.libmeta{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-top:26px;display:flex;gap:22px;flex-wrap:wrap}
+
+.courses{display:grid;gap:0;margin-top:8px}
+.ccard{
+  display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:40px;align-items:start;
+  padding:38px 20px 38px 24px;margin-left:-24px;
+  border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
+  position:relative;transition:background .14s;
+}
+.ccard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--c1),var(--c2));opacity:.85}
+.ccard:hover{background:#fff}
+.ccard.locked{opacity:.62;cursor:default}
+.cc-sub{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:10px}
+.cc-title{font-family:var(--display);font-weight:700;font-size:1.85rem;letter-spacing:-.022em;line-height:1.08;margin:0 0 4px}
+.cc-hero{font-family:var(--display);font-weight:400;font-size:1.02rem;color:var(--ink-soft);margin:0 0 14px;line-height:1.35}
+.cc-blurb{font-size:.95rem;line-height:1.6;color:var(--ink-soft);margin:0;max-width:56ch}
+.cc-parts{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:16px;line-height:1.9}
+.cc-parts b{color:var(--ink);font-weight:400}
+
+.cc-side{padding-top:26px}
+.ring{display:block;margin:0 0 12px}
+.cc-stat{font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.8}
+.cc-stat strong{color:var(--ink);font-weight:700}
+.cc-go{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;margin-top:14px;display:inline-block}
+.ccard:hover .cc-go{color:var(--server)}
+
+/* ============ course switcher in the side nav ============ */
+.liblink{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;margin-bottom:16px}
+.liblink:hover{color:var(--ink)}
+.cswitchwrap{display:grid;gap:3px;margin:0 0 20px;padding-bottom:18px;border-bottom:1px solid var(--rule)}
+.cswitch{display:block;text-decoration:none;padding:7px 9px;border-radius:2px;border:1px solid transparent}
+.cswitch:hover{background:#fff}
+.cswitch.on{background:#fff;border-color:var(--rule)}
+.cs-t{display:block;font-family:var(--display);font-weight:600;font-size:12.5px;color:var(--ink);line-height:1.2}
+.cs-s{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:3px}
+.cswitch.on .cs-t{color:var(--server)}
+
+/* ============ cross-course references ============ */
+.xrefs{display:block;margin-top:9px;display:flex;flex-direction:column;gap:4px}
+.xref{display:block;font-family:var(--mono);font-size:10.5px;line-height:1.5;padding-left:13px;position:relative}
+.xref::before{content:"\2197";position:absolute;left:0;top:0;color:var(--server);font-size:10px}
+.xref a{text-decoration:none;color:var(--client);border-bottom:1px solid rgba(27,79,216,.28)}
+.xref a:hover{border-bottom-color:var(--client)}
+.xr-dead{color:var(--ink-soft)}
+.xr-why{color:var(--ink-soft);margin-left:7px}
+
+.callout.xref-note{border-left-color:var(--server);background:#fff}
+.callout.xref-note .tag{color:var(--server)}
+
+@media (max-width:820px){
+  .libwrap{padding:44px 20px 80px}
+  .ccard{grid-template-columns:1fr;gap:20px;padding:28px 16px;margin-left:-16px}
+  .cc-side{padding-top:0;display:flex;align-items:center;gap:18px}
+  .ring{margin:0}
+}
+@media print{ .cswitchwrap,.liblink{display:none!important} }
+
+/* ============ print ============ */
+@media print{
+  :root{--paper:#fff;--measure:none}
+  body{font-size:11pt}
+  .wire-rail,.sidenav,.chapnav,.chapfoot,.donebar,.chip,.lab .labhead button,.navtoggle{display:none!important}
+  .layout{display:block}
+  .content{padding:0}
+  .demo,.quiz,pre,.callout,table{break-inside:avoid;border-color:#999}
+  a{color:inherit;text-decoration:none}
+  a[href^="http"]::after{content:" (" attr(href) ")";font-size:8pt;color:#666}
+  h2{break-after:avoid}
+  .why{display:block!important}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body class="course-the-wire" data-chapter="18">
+<div class="wire-rail"></div>
+<div class="layout">
+<aside class="sidenav" id="side"></aside>
+<main class="content">
+<nav class="chapnav"></nav>
+
+<header class="masthead">
+  <p class="eyebrow">Part V &nbsp;·&nbsp; Applied and operational &nbsp;·&nbsp; Chapter 18</p>
+  <h1>Web application security</h1>
+  <p class="lede">TLS delivers bytes intact from one endpoint to another. It has nothing to say about whether those bytes should have been sent, or what the receiving application does with them. Almost every breach you have read about happened above the transport layer, on a connection with a perfectly valid padlock.</p>
+</header>
+
+<div class="col">
+
+<h2>18.1 One idea underneath most of it</h2>
+
+<p>Chapter 1 defined a trust boundary as any line across which data changes trust level. Nearly every vulnerability in this chapter is the same failure: <strong>attacker-controlled data crossing a boundary and being interpreted rather than treated as inert.</strong></p>
+
+<table>
+<thead><tr><th>Vulnerability</th><th>Data crosses into…</th><th>…and is interpreted as</th></tr></thead>
+<tbody>
+<tr><td>SQL injection</td><td>The database</td><td>Query structure</td></tr>
+<tr><td>XSS</td><td>The browser</td><td>Markup and script</td></tr>
+<tr><td>Command injection</td><td>A shell</td><td>Commands</td></tr>
+<tr><td>Path traversal</td><td>The filesystem</td><td>A path</td></tr>
+<tr><td>SSRF</td><td>Your network</td><td>A destination to fetch</td></tr>
+<tr><td>Deserialisation</td><td>The runtime</td><td>Objects, sometimes code</td></tr>
+<tr><td>Template injection</td><td>A template engine</td><td>Template syntax</td></tr>
+</tbody>
+</table>
+
+<p>The fix has the same shape every time: <strong>separate data from structure at the interface</strong>, so no amount of hostile content can change the structure. Parameterised queries do this for SQL. Contextual escaping does it for HTML. <code>execve</code> with an argument array does it for shells. Sanitising, blocklisting and escaping-by-hand are all attempts to solve it inside the data, and all of them have a bypass.</p>
+
+<div class="callout bad">
+  <span class="tag">Why filtering fails</span>
+  <p>A blocklist enumerates badness, and the attacker only needs one thing you did not think of. Encoding tricks, Unicode normalisation, double encoding, nested payloads that reassemble after your filter strips the inner one — the search space belongs to the attacker. Parameterisation is different in kind: the query structure is fixed <em>before</em> any user data is bound, so there is no parsing step for the data to influence. Prefer mechanisms that make the attack impossible over mechanisms that try to recognise it.</p>
+</div>
+
+<h2>18.2 Cross-site scripting</h2>
+
+<p>XSS is script running in your origin, which means it inherits everything the origin can do: read the DOM, read non-<code>HttpOnly</code> cookies, make authenticated requests, and rewrite the page. Three variants:</p>
+
+<ul>
+<li><strong>Reflected</strong> — the payload is in the request and echoed into the response. Needs a crafted link.</li>
+<li><strong>Stored</strong> — the payload is persisted and served to everyone. The dangerous one.</li>
+<li><strong>DOM-based</strong> — no server involvement; client-side JavaScript writes untrusted data into a dangerous sink like <code>innerHTML</code>, <code>document.write</code> or <code>eval</code>.</li>
+</ul>
+
+<p>Escaping is <strong>context-dependent</strong>, and this is where hand-rolled defences fail. The same string needs different treatment in HTML text, an attribute, a URL, inside a <code>&lt;script&gt;</code> block, or in CSS. Use a template engine that escapes automatically and knows the context; treat any manual escape as a smell.</p>
+
+<h2>18.3 The headers that matter</h2>
+
+<p>Response headers and cookie flags are cheap and disproportionately effective. Configure them below and see what each one buys.</p>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · headers and cookie flags</span><span id="whstat">0 of 7 enabled</span></div>
+  <div class="demobody">
+    <div class="ctl" id="whctl"></div>
+    <div class="out" id="whresp" style="margin-bottom:14px"></div>
+    <div class="out" id="whout" style="background:#fff"></div>
+  </div>
+  <div class="demonote">None of these fixes a vulnerability. They reduce what an attacker can do once one exists — which is exactly the defence-in-depth argument from Chapter 1, and only counts because these layers fail independently of your application code.</div>
+</div>
+
+<h2>18.4 CSRF, and what SameSite changed</h2>
+
+<p>The browser attaches your cookies to any request to a site, regardless of which page triggered it. So a form on <code>evil.com</code> posting to <code>bank.example/transfer</code> arrives fully authenticated. The application cannot tell it apart from a legitimate submission, because in every respect that matters it is one.</p>
+
+<p><code>SameSite=Lax</code> became the browser default around 2020 and removed most of this class: cookies are not sent on cross-site POSTs. It is a default, not a guarantee — older clients, deliberate <code>SameSite=None</code> for legitimate cross-site flows, and GET-based state changes all remain exposed. So keep a token defence for anything that changes state:</p>
+
+<ul>
+<li><strong>Synchroniser token</strong> — a random per-session value in the form, checked server-side. Still the standard.</li>
+<li><strong>Double-submit cookie</strong> — the same value in a cookie and a header; the attacker can cause the cookie to be sent but cannot read it to set the header. Weaker if subdomains are compromised.</li>
+<li><strong>Origin / Sec-Fetch-Site checks</strong> — modern browsers send these and they cannot be forged by page content.</li>
+</ul>
+
+<div class="callout warn">
+  <span class="tag">Never use GET for state changes</span>
+  <p>A GET that changes state is reachable from an <code>&lt;img&gt;</code> tag, a link, a prefetch, or a corporate proxy warming its cache. <code>SameSite=Lax</code> deliberately still sends cookies on top-level GET navigations, so it does not protect these. This is also why 0-RTT early data (Ch. 13) is safe for GET and unsafe for anything else — the same idempotency requirement, arriving from a different direction.</p>
+</div>
+
+<h2>18.5 SSRF</h2>
+
+<p>Your application fetches a URL the user supplied — a webhook, an image import, a PDF renderer. The request originates from <em>inside</em> your network, so it reaches things the user never could. In cloud environments the classic target is the instance metadata service at <code>169.254.169.254</code>, which hands out credentials to anything that asks.</p>
+
+<p>This was the 2019 Capital One breach: an SSRF in a WAF let an attacker reach metadata, retrieve IAM role credentials, and read over a hundred million records from S3.</p>
+
+<p>Defences, in order of effectiveness:</p>
+<ul>
+<li><strong>Allowlist destinations</strong> where the use case permits. The only robust answer.</li>
+<li><strong>Egress network policy</strong> — the fetching workload should not be able to reach internal ranges or the metadata endpoint at all. This is a Chapter 22 control and it does not depend on getting the code right.</li>
+<li><strong>IMDSv2</strong> — requires a PUT to obtain a token and rejects requests with a forwarded header, which defeats naive SSRF. Enforce it; v1 remains available otherwise.</li>
+<li><strong>Careful URL handling</strong> — and be aware that blocklisting IPs is fragile: DNS rebinding, redirects, IPv6 forms, decimal and octal encodings, and <code>0.0.0.0</code> all bypass naive checks.</li>
+</ul>
+
+<h2>18.6 The rest of the Top 10, briefly</h2>
+
+<table>
+<thead><tr><th>Category</th><th>The essence</th><th>What actually helps</th></tr></thead>
+<tbody>
+<tr><td>Broken access control</td><td>The most common category. Authorisation checked at the UI, or not per-object.</td><td>Check on every request, server-side, against the object being touched — not just the route</td></tr>
+<tr><td>Cryptographic failures</td><td>Secrets in plaintext, home-rolled crypto, bad password storage</td><td>Chapters 3, 4 and 21</td></tr>
+<tr><td>Insecure design</td><td>The flaw is in the requirements, not the code</td><td>Threat modelling before implementation</td></tr>
+<tr><td>Security misconfiguration</td><td>Defaults, debug endpoints, verbose errors, open buckets</td><td>Hardened baselines, scanning in CI</td></tr>
+<tr><td>Vulnerable components</td><td>Your dependencies are your attack surface</td><td>SBOMs, automated updates, and knowing what you ship</td></tr>
+<tr><td>Auth failures</td><td>Weak sessions, credential stuffing, no MFA</td><td>Chapter 19</td></tr>
+<tr><td>Integrity failures</td><td>Unsigned updates, compromised build pipelines</td><td>Signing (Ch. 7), SRI, supply-chain controls</td></tr>
+<tr><td>Logging failures</td><td>Breaches undetected for months</td><td>Log auth events and access decisions; alert on anomalies</td></tr>
+<tr><td>SSRF</td><td>Above</td><td>Egress policy plus allowlists</td></tr>
+</tbody>
+</table>
+
+<p>Note the top entry. <strong>Broken access control is consistently the largest category</strong>, and it has nothing to do with cryptography or clever payloads. It is usually a missing <code>if</code> — an endpoint that checks you are logged in but not that the record belongs to you.</p>
+
+<h2>18.7 Lab</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · audit a site's headers and cookies</span><button data-copy>Copy</button></div>
+<pre><code># Every security-relevant response header, in one shot
+curl -sSI https://example.com | grep -iE \
+  'strict-transport|content-security|x-frame|x-content-type|referrer-policy|permissions-policy|set-cookie|cross-origin'
+
+# Cookie flags \u2014 look for Secure, HttpOnly and SameSite on EVERY cookie
+curl -sSI https://example.com | grep -i '^set-cookie' | while read -r c; do
+  echo "$c"
+  for f in Secure HttpOnly SameSite; do
+    echo "$c" | grep -qi "$f" && echo "   \u2713 $f" || echo "   \u2717 $f MISSING"
+  done
+done
+
+# Is HSTS strong enough to be preloaded?
+curl -sSI https://example.com | grep -i strict-transport
+#   Needs: max-age >= 31536000; includeSubDomains; preload
+#   Check status: https://hstspreload.org/?domain=example.com
+
+# Does the site redirect HTTP to HTTPS, and does HSTS then take over?
+curl -sSI http://example.com | head -5
+
+# CSP, readably
+curl -sSI https://example.com | grep -i content-security-policy \
+  | tr ';' '\n' | sed 's/^ */  /'
+#   Look for 'unsafe-inline' and 'unsafe-eval' \u2014 both largely defeat the point.
+
+# CORS: is the origin reflected? A reflecting server with credentials is a serious bug.
+curl -sSI -H "Origin: https://evil.example" https://example.com/api/ \
+  | grep -i 'access-control-allow'
+#   Access-Control-Allow-Origin: https://evil.example  +  Allow-Credentials: true
+#   = any site can read authenticated responses. Never reflect arbitrary origins.
+
+# Subresource Integrity on third-party scripts
+curl -sS https://example.com | grep -oE '<script[^>]*src="https://[^"]*"[^>]*>' \
+  | grep -v integrity= | head
+#   Any external script without an integrity attribute is a CDN compromise away
+#   from executing arbitrary code in your origin.
+
+# Server-side: nginx headers worth setting
+cat <<'NGINX'
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+add_header Content-Security-Policy   "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
+add_header X-Content-Type-Options    "nosniff" always;
+add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy        "geolocation=(), camera=(), microphone=()" always;
+NGINX</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">Why are parameterised queries a stronger defence against SQL injection than escaping input?</p>
+    <div class="opts">
+      <button class="opt">They are faster</button>
+      <button class="opt">They encrypt the query in transit</button>
+      <button class="opt">The query structure is fixed before user data is bound, so data can never become structure</button>
+      <button class="opt">They validate data types automatically</button>
+    </div>
+    <p class="why">Escaping tries to neutralise dangerous characters inside the data, and the attacker gets unlimited attempts at encodings you did not anticipate. Parameterisation removes the parsing step entirely — the database receives a fixed structure plus values, and no value can alter the structure. Same principle as contextual auto-escaping for HTML and argument arrays for shells.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">What does <code>HttpOnly</code> on a session cookie prevent?</p>
+    <div class="opts">
+      <button class="opt">JavaScript reading the cookie, so XSS cannot exfiltrate the session directly</button>
+      <button class="opt">The cookie being sent over plain HTTP</button>
+      <button class="opt">The cookie being sent on cross-site requests</button>
+      <button class="opt">The cookie being stored on disk</button>
+    </div>
+    <p class="why">It blocks <code>document.cookie</code> access. Note what it does <em>not</em> do: injected script can still make authenticated requests from within the page, because the browser attaches the cookie automatically. HttpOnly limits exfiltration, not abuse. The other three options describe Secure and SameSite.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">An application fetches user-supplied URLs to generate link previews. What is the highest-value defence?</p>
+    <div class="opts">
+      <button class="opt">Blocking URLs containing "169.254.169.254"</button>
+      <button class="opt">Validating that the URL uses HTTPS</button>
+      <button class="opt">Rate limiting the endpoint</button>
+      <button class="opt">Egress network policy preventing that workload from reaching internal ranges or the metadata endpoint at all</button>
+    </div>
+    <p class="why">String blocklists are bypassed by DNS rebinding, redirects, IPv6 forms and decimal or octal encodings — the attacker controls the search space. A network control does not depend on parsing the URL correctly and holds even when the code is wrong. Combine with an allowlist and IMDSv2 where possible.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">Which vulnerability category is consistently the most common in the OWASP Top 10?</p>
+    <div class="opts">
+      <button class="opt">Cryptographic failures</button>
+      <button class="opt">Broken access control</button>
+      <button class="opt">Injection</button>
+      <button class="opt">Security misconfiguration</button>
+    </div>
+    <p class="why">It is rarely exotic — usually an endpoint that verifies you are authenticated but not that the record you asked for is yours. No cryptography involved, no clever payload, just a missing check. Authorisation must be enforced server-side, on every request, against the specific object being accessed.</p>
+  </div>
+</div>
+
+<h2>18.8 Carry forward</h2>
+<ul>
+<li>Most web vulnerabilities are attacker data crossing a boundary and being interpreted as structure.</li>
+<li>Separate data from structure at the interface. Filtering is a losing game.</li>
+<li>Escaping is context-dependent; use an auto-escaping template engine.</li>
+<li>Headers and cookie flags are cheap layers that fail independently of your code.</li>
+<li>SameSite removed most CSRF but is not a substitute for tokens on state-changing routes.</li>
+<li>SSRF is best solved at the network, not in the URL parser.</li>
+<li>Broken access control is the biggest category, and it is usually a missing check.</li>
+</ul>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
+</main>
+</div>
+
+<script>
+(function(){
+  var H = [
+    { id:'hsts', label:'HSTS',
+      hdr:'Strict-Transport-Security: max-age=63072000; includeSubDomains; preload',
+      t:'HTTP Strict Transport Security',
+      on:'The browser refuses plaintext HTTP for this host for two years, upgrading every request before it leaves the machine. This kills <strong>SSL stripping</strong> (Ch. 2), where an attacker intercepts the initial HTTP request and keeps the victim on plaintext while speaking HTTPS to the server \u2014 the padlock simply never appears and most users never look.<br><br><code>preload</code> submits the domain to a list compiled into browsers, closing the one remaining gap: the very first visit, before any HSTS header has been seen. <span style="color:#E8A317">Preloading is hard to reverse</span> \u2014 removal takes months to propagate \u2014 so be certain every subdomain can serve HTTPS first.',
+      off:'<span style="color:#C1121F">Without it, the first request is plaintext.</span> A user typing <code>bank.example</code> sends an HTTP request that an on-path attacker intercepts, and SSL stripping proceeds from there. Your redirect to HTTPS is itself unprotected \u2014 the attacker simply does not deliver it.' },
+
+    { id:'csp', label:'CSP',
+      hdr:"Content-Security-Policy: default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      t:'Content Security Policy',
+      on:'Declares which sources may load and execute. Injected <code>&lt;script src="//evil.example"&gt;</code> is blocked, and with a nonce- or hash-based policy inline script is blocked too \u2014 which is most XSS payloads.<br><br>CSP does not fix XSS; it limits what a successful XSS can do. <code>base-uri \'none\'</code> stops an injected <code>&lt;base&gt;</code> tag redirecting every relative URL. <code>frame-ancestors \'none\'</code> replaces X-Frame-Options.<br><br><span style="color:#E8A317">A policy containing <code>\'unsafe-inline\'</code> gives up most of the benefit.</span> Deploy with <code>Content-Security-Policy-Report-Only</code> first and read the reports before enforcing.',
+      off:'<span style="color:#C1121F">Any successful injection runs with the full authority of your origin.</span> It can read the DOM, read non-HttpOnly cookies, make authenticated requests, rewrite the page and exfiltrate anywhere. CSP is the difference between an XSS bug and an XSS incident.' },
+
+    { id:'secure', label:'Cookie: Secure',
+      hdr:'Set-Cookie: session=\u2026; Secure',
+      t:'Secure cookie flag',
+      on:'The cookie is only ever transmitted over HTTPS. Without it, a single plaintext request \u2014 a stray <code>http://</code> link, an image, a redirect that fires before HSTS applies \u2014 sends the session cookie in the clear to anyone on the path.',
+      off:'<span style="color:#C1121F">One plaintext request leaks the session.</span> It need not be a page load: an <code>&lt;img src="http://your-site/x"&gt;</code> on any page the user visits is enough to make their browser send the cookie unencrypted.' },
+
+    { id:'httponly', label:'Cookie: HttpOnly',
+      hdr:'Set-Cookie: session=\u2026; HttpOnly',
+      t:'HttpOnly cookie flag',
+      on:'JavaScript cannot read the cookie via <code>document.cookie</code>, so an XSS payload cannot simply exfiltrate the session to an attacker\u2019s server.<br><br><span style="color:#E8A317">Understand the limit.</span> Injected script can still <em>use</em> the session, because the browser attaches the cookie to requests automatically. HttpOnly stops the attacker taking the session away with them; it does not stop them acting as the user while the page is open. That is a meaningful difference \u2014 it turns a persistent compromise into a transient one \u2014 but it is not a fix for XSS.',
+      off:'<span style="color:#C1121F">Any XSS becomes full session theft.</span> Three lines of injected script send the cookie to an attacker-controlled endpoint, and they then have the session from their own machine, indefinitely.' },
+
+    { id:'samesite', label:'Cookie: SameSite=Lax',
+      hdr:'Set-Cookie: session=\u2026; SameSite=Lax',
+      t:'SameSite cookie attribute',
+      on:'The cookie is not sent on cross-site POSTs, which removes most <strong>CSRF</strong>. A form on <code>evil.example</code> posting to your transfer endpoint now arrives unauthenticated.<br><br><code>Lax</code> deliberately still sends cookies on top-level GET navigations, so links from other sites keep working \u2014 which is exactly why <strong>a GET must never change state</strong>. <code>Strict</code> blocks those too, at the cost of users arriving from external links appearing logged out.<br><br>Browsers default to Lax now, but keep a synchroniser token: the default does not cover older clients, deliberate <code>SameSite=None</code> flows, or GET-based state changes.',
+      off:'<span style="color:#C1121F">Cross-site requests carry full credentials.</span> Any page the user visits can submit an authenticated form to your application, and your server cannot distinguish it from a legitimate one.' },
+
+    { id:'nosniff', label:'X-Content-Type-Options',
+      hdr:'X-Content-Type-Options: nosniff',
+      t:'MIME sniffing prevention',
+      on:'The browser honours the declared <code>Content-Type</code> instead of guessing from content. Without it, a file you serve as <code>text/plain</code> that happens to contain markup can be interpreted as HTML and executed in your origin \u2014 turning a benign file upload into stored XSS.',
+      off:'<span style="color:#E8A317">Uploaded files can be reinterpreted.</span> A user-supplied file served from your domain may execute as HTML or script regardless of the type you set. Serve user content from a separate origin as well, so even a successful sniff lands somewhere harmless.' },
+
+    { id:'referrer', label:'Referrer-Policy',
+      hdr:'Referrer-Policy: strict-origin-when-cross-origin',
+      t:'Referrer policy',
+      on:'Cross-origin requests send only your origin, not the full path and query string. Without it, a password-reset URL or a document link with a token leaks to every third-party asset the page loads, and into their logs.',
+      off:'<span style="color:#E8A317">Full URLs leak to third parties.</span> Any analytics script, font, or embedded image receives the complete URL of the page the user was on \u2014 including tokens, record IDs and search terms sitting in the query string.' }
+  ];
+
+  var state = {};
+  H.forEach(function(h){ state[h.id]=false; });
+
+  var ctl=document.getElementById('whctl');
+  H.forEach(function(h){
+    var b=document.createElement('button');
+    b.className='chip'; b.textContent=h.label; b.dataset.h=h.id;
+    ctl.appendChild(b);
+  });
+  var all=document.createElement('button');
+  all.className='chip'; all.id='whall'; all.textContent='Enable all';
+  all.style.marginLeft='10px'; ctl.appendChild(all);
+
+  function render(sel){
+    var on = H.filter(function(h){ return state[h.id]; });
+    document.getElementById('whstat').textContent = on.length+' of '+H.length+' enabled';
+    document.getElementById('whstat').style.color = on.length===H.length ? '#0B8A5B' : (on.length===0?'#C1121F':'#4A4F58');
+
+    document.getElementById('whresp').innerHTML =
+      '<span style="color:#4A4F58">HTTP/2 200</span><br>' +
+      (on.length
+        ? on.map(function(h){
+            var p=h.hdr.split(': ');
+            return '<span style="color:#1B4FD8">'+p[0]+'</span>: '+p.slice(1).join(': ');
+          }).join('<br>')
+        : '<span style="color:#C1121F">(no security headers set)</span>') +
+      '<br><span style="color:#4A4F58">content-type: text/html</span>';
+
+    var h = sel ? H.filter(function(x){return x.id===sel;})[0] : null;
+    if(!h){
+      document.getElementById('whout').innerHTML = on.length===H.length
+        ? '<span style="color:#0B8A5B"><strong>All seven set.</strong></span> None of these fixes a vulnerability \u2014 they bound what an attacker can do once one exists. That is the whole defence-in-depth argument from Chapter 1, and it only counts because these controls fail independently of your application code: a missing authorisation check does not disable CSP, and an XSS bug does not clear the HttpOnly flag.<br><br>Click any header above for what it specifically buys you.'
+        : 'Click any header or flag above to see what it does, and what happens without it. Toggle them to build a response.';
+      document.getElementById('whout').style.borderLeft='';
+      return;
+    }
+    var isOn = state[h.id];
+    document.getElementById('whout').innerHTML =
+      '<strong>'+h.t+'</strong> &nbsp;<span style="font-family:var(--mono);font-size:11px;color:'+(isOn?'#0B8A5B':'#C1121F')+'">'+(isOn?'ENABLED':'NOT SET')+'</span><br><br>'+
+      (isOn ? h.on : h.off);
+    document.getElementById('whout').style.borderLeft='3px solid '+(isOn?'#0B8A5B':'#C1121F');
+  }
+
+  ctl.addEventListener('click',function(e){
+    var b=e.target.closest('[data-h]');
+    if(b){
+      state[b.dataset.h] = !state[b.dataset.h];
+      b.classList.toggle('on', state[b.dataset.h]);
+      render(b.dataset.h);
+      return;
+    }
+    if(e.target.id==='whall'){
+      var allOn = H.every(function(h){ return state[h.id]; });
+      H.forEach(function(h){ state[h.id] = !allOn; });
+      ctl.querySelectorAll('[data-h]').forEach(function(x){ x.classList.toggle('on', !allOn); });
+      e.target.textContent = allOn ? 'Enable all' : 'Clear all';
+      render(null);
+    }
+  });
+
+  render(null);
+})();
+</script>
+
+<script>
+/* ============================================================
+   The library manifest: every course, every chapter.
+   Add a chapter here and it appears in the side nav, the course
+   landing page, search, progress and prev/next navigation.
+
+   xref: [{course, n, why}]  declares a cross-course link.
+   ============================================================ */
+window.LIBRARY = {
+  title: "Field Notes",
+  tagline: "Interactive courses on the systems underneath everything.",
+
+  courses: [
+    /* ---------------------------------------------------------- */
+    {
+      id: "the-wire",
+      slug: "the-wire",
+      title: "The Wire",
+      subtitle: "Security \u00B7 Crypto \u00B7 TLS",
+      hero: "Everything between saying it and being believed",
+      blurb: "Computer security, cryptography, certificates and TLS, taught in dependency order. Each chapter's answer becomes the next chapter's question.",
+      parts: [
+        { id:"I",   name:"Foundations",              range:[1,2] },
+        { id:"II",  name:"Cryptographic primitives", range:[3,7] },
+        { id:"III", name:"Identity and trust",       range:[8,11] },
+        { id:"IV",  name:"TLS on the wire",          range:[12,17] },
+        { id:"V",   name:"Applied and operational",  range:[18,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-what-security-means.html", title:"What security actually means",
+          desc:"CIA triad, threat models, attacker capability classes, trust boundaries, defence in depth.",
+          keys:"cia confidentiality integrity availability threat model dolev-yao trust boundary kerckhoffs" },
+        { n:2, file:"02-adversary-toolkit.html", title:"The adversary's toolkit",
+          desc:"Where an attacker can stand and what that position buys them. Passive, active, MITM, replay, downgrade.",
+          keys:"mitm eavesdrop replay downgrade arp spoofing bgp hijack rogue ap side channel" },
+        { n:3, file:"03-hashing-integrity.html", title:"Hashing and integrity",
+          desc:"Preimage and collision resistance, SHA-2/3, the avalanche effect, HMAC, length extension.",
+          keys:"hash sha256 sha3 md5 collision preimage avalanche hmac length extension argon2" },
+        { n:4, file:"04-symmetric-encryption.html", title:"Symmetric encryption",
+          desc:"AES internals, block vs stream, ECB/CBC/CTR/GCM, IVs and nonces, AEAD and why it exists.",
+          keys:"aes symmetric block cipher ecb cbc ctr gcm chacha20 poly1305 aead iv nonce padding oracle" },
+        { n:5, file:"05-asymmetric-encryption.html", title:"Asymmetric encryption",
+          desc:"RSA and elliptic curves, what each half of a key pair can do, OAEP, key sizes that matter.",
+          keys:"rsa public key private key ecc elliptic curve p256 x25519 oaep modulus trapdoor" },
+        { n:6, file:"06-key-exchange.html", title:"Key exchange",
+          desc:"Diffie-Hellman step by step, ECDHE, forward secrecy, and why static RSA key transport died.",
+          keys:"diffie hellman dh ecdhe forward secrecy pfs shared secret discrete log x25519 logjam" },
+        { n:7, file:"07-digital-signatures.html", title:"Digital signatures",
+          desc:"Signing is not backwards encryption. RSA-PSS, ECDSA, Ed25519, and what a signature proves.",
+          keys:"signature sign verify rsa-pss ecdsa ed25519 nonce reuse non-repudiation" },
+        { n:8, file:"08-pki-trust-model.html", title:"The PKI trust model",
+          desc:"Why cryptography alone proves nothing about identity. Roots, intermediates, leaves, path building.",
+          keys:"pki root ca intermediate leaf chain of trust trust store path building cross-signing" },
+        { n:9, file:"09-inside-x509.html", title:"Inside an X.509 certificate",
+          desc:"Every field, byte by byte. DER and ASN.1, SAN vs CN, extensions, key usage, basic constraints.",
+          keys:"x509 asn1 der pem san cn extensions key usage basic constraints serial issuer subject" },
+        { n:10, file:"10-certificate-lifecycle.html", title:"Certificate lifecycle",
+          desc:"CSR to issuance to renewal. DV/OV/EV, ACME and Let's Encrypt, CAA records, private CAs.",
+          keys:"csr acme lets encrypt dv ov ev caa renewal cert-manager private ca issuance",
+          xref:[{course:"kubernetes", n:12, why:"cert-manager and ingress TLS in practice"}] },
+        { n:11, file:"11-revocation-transparency.html", title:"Revocation and transparency",
+          desc:"CRL, OCSP, stapling, must-staple, and Certificate Transparency logs and SCTs.",
+          keys:"crl ocsp stapling must-staple certificate transparency ct log sct revocation merkle" },
+        { n:12, file:"12-tls12-handshake.html", title:"The TLS 1.2 handshake",
+          desc:"Every message in order, with real bytes. ClientHello through Finished, and why each exists.",
+          keys:"tls 1.2 handshake clienthello serverhello certificate serverkeyexchange finished prf" },
+        { n:13, file:"13-tls13-handshake.html", title:"The TLS 1.3 handshake",
+          desc:"1-RTT and 0-RTT, the HKDF key schedule, and everything RFC 8446 deleted on purpose.",
+          keys:"tls 1.3 rfc8446 1-rtt 0-rtt early data hkdf key schedule helloretryrequest" },
+        { n:14, file:"14-cipher-suites.html", title:"Cipher suites decoded",
+          desc:"Reading a suite string, negotiation rules, ALPN, SNI, and Encrypted Client Hello.",
+          keys:"cipher suite negotiation alpn sni ech esni grease tls_aes_128_gcm_sha256" },
+        { n:15, file:"15-after-the-handshake.html", title:"After the handshake",
+          desc:"The record layer, sequence numbers, session resumption and tickets, rekeying, close_notify.",
+          keys:"record layer session resumption ticket psk rekey key update close_notify" },
+        { n:16, file:"16-mtls.html", title:"Mutual TLS",
+          desc:"Client certificates end to end: CertificateRequest, verification, and where mTLS belongs.",
+          keys:"mtls mutual tls client certificate certificaterequest certificateverify spiffe",
+          xref:[{course:"kubernetes", n:10, why:"service mesh mTLS between pods"}] },
+        { n:17, file:"17-when-tls-breaks.html", title:"When TLS breaks",
+          desc:"Decoding real errors, plus BEAST, CRIME, POODLE, Heartbleed, Logjam and downgrade attacks.",
+          keys:"error expired self-signed hostname mismatch unknown_ca beast crime poodle heartbleed" },
+        { n:18, file:"18-web-app-security.html", title:"Web application security",
+          desc:"OWASP Top 10 in practice: XSS, CSRF, SQLi, SSRF, plus HSTS, CSP, CORS and cookie flags.",
+          keys:"owasp xss csrf sqli ssrf hsts csp cors samesite httponly subresource integrity" },
+        { n:19, file:"19-authn-authz.html", title:"Authentication and authorization",
+          desc:"Password storage, MFA, sessions vs tokens, JWT pitfalls, OAuth 2.0, OIDC and SAML.",
+          keys:"authentication authorization argon2 bcrypt mfa totp webauthn passkey jwt oauth oidc saml rbac",
+          xref:[{course:"kubernetes", n:20, why:"how RBAC and bound service account tokens apply this"}] },
+        { n:20, file:"20-network-security.html", title:"Network security",
+          desc:"TCP/IP and where security attaches, firewalls, IPsec and WireGuard, DNSSEC, DoH/DoT, Zero Trust.",
+          keys:"tcp ip firewall vpn ipsec wireguard dns dnssec doh dot zero trust segmentation",
+          xref:[{course:"linux", n:15, why:"netfilter hooks and conntrack, where the rules actually run"}] },
+        { n:21, file:"21-secrets-key-management.html", title:"Secrets and key management",
+          desc:"HSMs, KMS, envelope encryption, rotation strategy, and keeping secrets out of CI/CD.",
+          keys:"hsm kms envelope encryption dek kek rotation vault sealed secrets secret scanning",
+          xref:[{course:"kubernetes", n:17, why:"why Kubernetes Secrets are not secret"}] },
+        { n:22, file:"22-cloud-kubernetes.html", title:"Security in cloud and Kubernetes",
+          desc:"TLS at ingress, service mesh mTLS, cert-manager, workload identity, network policy, pod hardening.",
+          keys:"kubernetes ingress service mesh istio linkerd cert-manager workload identity network policy",
+          xref:[{course:"kubernetes", n:13, why:"how network policy is actually enforced"},
+                {course:"linux", n:11, why:"capabilities, seccomp and LSMs underneath pod security"}] },
+        { n:23, file:"23-post-quantum.html", title:"Post-quantum and what comes next",
+          desc:"Shor and Grover, ML-KEM and ML-DSA, hybrid key exchange, harvest-now-decrypt-later.",
+          keys:"post quantum shor grover ml-kem kyber ml-dsa dilithium hybrid harvest now decrypt later" },
+        { n:24, file:"24-putting-it-together.html", title:"Putting it all together",
+          desc:"Capstone: one HTTPS request from keystroke to rendered page, every layer visible at once.",
+          keys:"capstone end to end https request dns tcp tls http rendering full path" }
+      ],
+      appendix: [
+        { file:"appendix-glossary.html", title:"Glossary", desc:"Every term used in the course, defined once.", soon:true },
+        { file:"appendix-openssl.html", title:"OpenSSL cheat sheet", desc:"The commands worth memorising, grouped by task.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "kubernetes",
+      slug: "kubernetes",
+      title: "Inside Out",
+      subtitle: "Kubernetes internals",
+      hero: "What actually happens when you type kubectl apply",
+      blurb: "Kubernetes as a set of cooperating control loops rather than a pile of YAML. Vendor-neutral throughout, from the API server request path to a packet reaching your pod.",
+      parts: [
+        { id:"I",   name:"The model",              range:[1,4] },
+        { id:"II",  name:"Scheduling and lifecycle", range:[5,8] },
+        { id:"III", name:"Networking",             range:[9,13] },
+        { id:"IV",  name:"Storage and state",      range:[14,15] },
+        { id:"V",   name:"Workloads",              range:[16,19] },
+        { id:"VI",  name:"Operating it",           range:[20,24] }
+      ],
+      chapters: [
+        { n:1, file:"01-declarative-reconciliation.html", title:"Declarative reconciliation", soon:true,
+          desc:"Desired state, observed state, and the control loop that closes the gap. The one idea the rest of the system is built from.",
+          keys:"declarative imperative reconciliation control loop desired state observed state level triggered idempotent" },
+        { n:2, file:"02-api-server.html", title:"The API server", soon:true,
+          desc:"Groups, versions and kinds, spec and status, and the full request path: authentication, authorization, admission, validation, storage.",
+          keys:"api server gvk gvr spec status request path authentication authorization admission validation openapi",
+          xref:[{course:"the-wire", n:16, why:"the mTLS that authenticates every component to the API server"}] },
+        { n:3, file:"03-etcd.html", title:"etcd", soon:true,
+          desc:"Raft consensus, the revision model, watches, leases and compaction. Why cluster state is a single consistent log.",
+          keys:"etcd raft consensus quorum revision watch lease compaction defrag backup restore" },
+        { n:4, file:"04-controllers-informers.html", title:"Controllers and informers", soon:true,
+          desc:"The shared informer cache, work queues, resync, and why level-triggered logic survives missed events.",
+          keys:"controller informer lister workqueue resync level triggered edge triggered controller-runtime" },
+        { n:5, file:"05-scheduler.html", title:"The scheduler", soon:true,
+          desc:"Filter and score, node affinity, taints and tolerations, topology spread, and preemption.",
+          keys:"scheduler filter score predicate priority affinity anti-affinity taint toleration topology spread preemption" },
+        { n:6, file:"06-pod-lifecycle.html", title:"Pod lifecycle", soon:true,
+          desc:"Phases and conditions, init and sidecar containers, the three probe types, and graceful termination.",
+          keys:"pod lifecycle phase condition init container sidecar liveness readiness startup probe prestop sigterm grace period",
+          xref:[{course:"linux", n:13, why:"what SIGTERM and SIGKILL actually do to a process"}] },
+        { n:7, file:"07-kubelet.html", title:"The kubelet", soon:true,
+          desc:"The node agent's sync loop, PLEG, node status and heartbeats, and eviction under pressure.",
+          keys:"kubelet sync loop pleg node status heartbeat lease eviction pressure static pod cadvisor" },
+        { n:8, file:"08-container-runtime.html", title:"Container runtimes", soon:true,
+          desc:"CRI, containerd and runc, the OCI image and runtime specs, image pull and snapshotters.",
+          keys:"cri containerd runc oci image spec runtime spec snapshotter overlayfs registry pull",
+          xref:[{course:"linux", n:12, why:"build the same isolation by hand in fifty lines"}] },
+        { n:9, file:"09-network-model.html", title:"The network model", soon:true,
+          desc:"The flat addressing rules every CNI must satisfy, pod-to-pod paths, overlays versus native routing.",
+          keys:"cni network model flat addressing pod cidr overlay vxlan native routing veth bridge" },
+        { n:10, file:"10-services-kube-proxy.html", title:"Services and kube-proxy", soon:true,
+          desc:"ClusterIP as a fiction maintained by rules. iptables versus IPVS, EndpointSlices, session affinity.",
+          keys:"service clusterip nodeport loadbalancer kube-proxy iptables ipvs endpointslice dnat session affinity",
+          xref:[{course:"linux", n:15, why:"the netfilter chains those rules are written into"}] },
+        { n:11, file:"11-coredns.html", title:"DNS and service discovery", soon:true,
+          desc:"CoreDNS, the search domain list, and the ndots setting that quietly multiplies your query volume.",
+          keys:"coredns dns service discovery search domain ndots resolv.conf headless srv record" },
+        { n:12, file:"12-ingress-gateway.html", title:"Ingress and Gateway API", soon:true,
+          desc:"Ingress controllers, TLS termination, path and host routing, and what Gateway API changes.",
+          keys:"ingress controller gateway api httproute tls termination sni path routing cert-manager",
+          xref:[{course:"the-wire", n:10, why:"how those certificates are issued and renewed"}] },
+        { n:13, file:"13-network-policy.html", title:"Network policy", soon:true,
+          desc:"Default-allow is the starting point. Ingress and egress selectors, and how a CNI enforces them.",
+          keys:"network policy default allow deny ingress egress podselector namespaceselector cilium calico ebpf",
+          xref:[{course:"the-wire", n:22, why:"where this sits in a defence-in-depth design"}] },
+        { n:14, file:"14-storage-csi.html", title:"Volumes, PVs and CSI", soon:true,
+          desc:"The PV/PVC binding dance, StorageClasses and dynamic provisioning, CSI attach, mount and detach.",
+          keys:"volume persistentvolume persistentvolumeclaim storageclass dynamic provisioning csi attach mount reclaim policy",
+          xref:[{course:"linux", n:6, why:"what mounting actually does to a namespace"}] },
+        { n:15, file:"15-statefulsets.html", title:"StatefulSets", soon:true,
+          desc:"Stable identity, ordered rollout, headless services and per-replica volume claims.",
+          keys:"statefulset stable identity ordinal headless service pvc template ordered rollout partition" },
+        { n:16, file:"16-deployments-rollouts.html", title:"Deployments and rollouts", soon:true,
+          desc:"ReplicaSet mechanics, maxSurge and maxUnavailable, revision history, rollback and stuck rollouts.",
+          keys:"deployment replicaset rollout maxsurge maxunavailable revision history rollback progress deadline recreate" },
+        { n:17, file:"17-config-secrets.html", title:"ConfigMaps and Secrets", soon:true,
+          desc:"Projection into env and volumes, update propagation delay, immutability, and why Secrets are only base64.",
+          keys:"configmap secret projected volume env update propagation immutable base64 encryption at rest sealed secrets external secrets",
+          xref:[{course:"the-wire", n:21, why:"envelope encryption and doing this properly"}] },
+        { n:18, file:"18-resources-qos.html", title:"Requests, limits and QoS", soon:true,
+          desc:"How requests drive scheduling and limits drive enforcement. Guaranteed, Burstable, BestEffort, throttling and OOMKill.",
+          keys:"requests limits qos guaranteed burstable besteffort cpu throttling cfs quota oomkill memory pressure",
+          xref:[{course:"linux", n:10, why:"cgroups v2 is what enforces every one of these numbers"},
+                {course:"linux", n:5,  why:"how the OOM killer chooses its victim"}] },
+        { n:19, file:"19-autoscaling.html", title:"Autoscaling", soon:true,
+          desc:"The HPA algorithm and its stabilisation windows, VPA's conflict with it, and node autoscaling.",
+          keys:"hpa vpa cluster autoscaler karpenter metrics server custom metrics stabilisation scale to zero keda" },
+        { n:20, file:"20-rbac-identity.html", title:"RBAC and workload identity", soon:true,
+          desc:"Subjects, verbs and resources, role aggregation, service accounts and bound projected tokens.",
+          keys:"rbac role clusterrole binding subject verb service account bound token projected oidc workload identity impersonation",
+          xref:[{course:"the-wire", n:19, why:"the token and federation model underneath"}] },
+        { n:21, file:"21-admission-control.html", title:"Admission control", soon:true,
+          desc:"Mutating and validating webhooks, ordering, failure policy, and CEL-based policy without a webhook.",
+          keys:"admission webhook mutating validating failurepolicy cel validatingadmissionpolicy opa gatekeeper kyverno pod security admission" },
+        { n:22, file:"22-crds-operators.html", title:"CRDs and operators", soon:true,
+          desc:"Extending the API, owner references and garbage collection, finalizers, and the operator pattern.",
+          keys:"crd custom resource operator finalizer owner reference garbage collection status subresource conversion webhook" },
+        { n:23, file:"23-debugging.html", title:"Debugging by symptom", soon:true,
+          desc:"A decision tree from the error you actually see: Pending, CrashLoopBackOff, ImagePullBackOff, OOMKilled, DNS failures.",
+          keys:"debugging pending crashloopbackoff imagepullbackoff oomkilled evicted dns failure events describe ephemeral container" },
+        { n:24, file:"24-capstone.html", title:"Capstone: apply to answer", soon:true,
+          desc:"One manifest from kubectl to a packet arriving at a container, with every component visible at once.",
+          keys:"capstone end to end kubectl apply full path request lifecycle" }
+      ],
+      appendix: [
+        { file:"appendix-kubectl.html", title:"kubectl field guide", desc:"The commands and jsonpath queries worth memorising.", soon:true }
+      ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "linux",
+      slug: "linux",
+      title: "Under the Hood",
+      subtitle: "Linux internals",
+      hero: "The machine your abstractions are standing on",
+      blurb: "Processes, memory, filesystems and isolation, from the syscall boundary down. Part III is the foundation every container runtime is built from.",
+      parts: [
+        { id:"I",   name:"Foundations",          range:[1,5] },
+        { id:"II",  name:"I/O and filesystems",  range:[6,8] },
+        { id:"III", name:"Isolation",            range:[9,12] },
+        { id:"IV",  name:"Communication",        range:[13,15] },
+        { id:"V",   name:"Runtime and observability", range:[16,20] }
+      ],
+      chapters: [
+        { n:1, file:"01-kernel-boundary.html", title:"The kernel boundary", soon:true,
+          desc:"User space and kernel space, the syscall mechanism, the stable ABI, and reading a trace.",
+          keys:"syscall kernel user space ring privilege abi vdso strace errno context switch" },
+        { n:2, file:"02-processes.html", title:"Processes", soon:true,
+          desc:"task_struct, fork and exec and exit, PIDs and PPIDs, orphans and zombies, the process tree.",
+          keys:"process task_struct fork exec exit clone pid ppid zombie orphan reaping wait exit status" },
+        { n:3, file:"03-scheduler.html", title:"The scheduler", soon:true,
+          desc:"CFS and its EEVDF successor, virtual runtime, nice and weights, preemption and load average.",
+          keys:"scheduler cfs eevdf vruntime nice weight runqueue preemption load average cpu affinity latency" },
+        { n:4, file:"04-virtual-memory.html", title:"Virtual memory", soon:true,
+          desc:"Address translation level by level, page tables and the TLB, mmap, demand paging and copy-on-write.",
+          keys:"virtual memory page table tlb mmu address translation page fault demand paging copy on write huge pages rss vsz" },
+        { n:5, file:"05-memory-pressure.html", title:"Memory pressure", soon:true,
+          desc:"The page cache, dirty writeback, swap and reclaim, and exactly how the OOM killer picks a victim.",
+          keys:"page cache dirty writeback swap swappiness reclaim kswapd oom killer oom_score_adj psi memory pressure",
+          xref:[{course:"kubernetes", n:18, why:"how Kubernetes exposes these as limits and QoS"}] },
+        { n:6, file:"06-files-descriptors.html", title:"Files and descriptors", soon:true,
+          desc:"The VFS, inodes and dentries, the three-table model of open files, and what fork actually shares.",
+          keys:"vfs inode dentry file descriptor open file table fork share offset dup redirect mount namespace" },
+        { n:7, file:"07-filesystems.html", title:"Filesystems", soon:true,
+          desc:"Journaling, extents and allocation, and precisely what fsync does and does not promise.",
+          keys:"ext4 xfs btrfs journaling extent allocation fsync fdatasync durability barrier overlayfs tmpfs" },
+        { n:8, file:"08-block-io.html", title:"The block layer and modern I/O", soon:true,
+          desc:"Request queues and I/O schedulers, and the real difference between blocking, epoll and io_uring.",
+          keys:"block layer bio request queue scheduler mq-deadline none blocking nonblocking epoll io_uring direct io readahead" },
+        { n:9, file:"09-namespaces.html", title:"Namespaces", soon:true,
+          desc:"All seven namespace types, entering and creating them by hand, and how a PID looks different from inside.",
+          keys:"namespace pid mount network uts ipc user cgroup unshare nsenter setns clone flags rootless" },
+        { n:10, file:"10-cgroups.html", title:"cgroups v2", soon:true,
+          desc:"The unified hierarchy, cpu.max throttling, memory.high versus memory.max, and pressure stall information.",
+          keys:"cgroup v2 unified hierarchy controller cpu.max cpu.weight memory.high memory.max io.max psi throttling delegation",
+          xref:[{course:"kubernetes", n:18, why:"the requests and limits that write these files"}] },
+        { n:11, file:"11-capabilities-seccomp.html", title:"Capabilities, seccomp and LSMs", soon:true,
+          desc:"Splitting root into capabilities, filtering syscalls with BPF, and where SELinux and AppArmor sit.",
+          keys:"capabilities cap_net_bind setuid no_new_privs seccomp bpf filter selinux apparmor lsm privileged container",
+          xref:[{course:"the-wire", n:22, why:"pod hardening built on exactly these primitives"}] },
+        { n:12, file:"12-container-from-scratch.html", title:"Build a container from scratch", soon:true,
+          desc:"pivot_root plus namespaces plus cgroups plus seccomp, in about fifty lines. No runtime involved.",
+          keys:"container from scratch chroot pivot_root namespace cgroup seccomp rootfs overlay runc oci",
+          xref:[{course:"kubernetes", n:8, why:"what containerd and runc do with all of this"}] },
+        { n:13, file:"13-signals.html", title:"Signals", soon:true,
+          desc:"Delivery and handlers, async-signal-safety, SIGTERM versus SIGKILL, process groups and PID 1's special role.",
+          keys:"signal sigterm sigkill sighup sigchld handler async signal safe process group session pid 1 init zombie reaping",
+          xref:[{course:"kubernetes", n:6, why:"why your pod ignores SIGTERM and gets killed after 30 seconds"}] },
+        { n:14, file:"14-ipc.html", title:"Inter-process communication", soon:true,
+          desc:"Pipes and their buffer, unix domain sockets and fd passing, shared memory, eventfd and futexes.",
+          keys:"ipc pipe fifo unix domain socket scm_rights fd passing shared memory shm eventfd futex mutex message queue" },
+        { n:15, file:"15-network-stack.html", title:"The network stack", soon:true,
+          desc:"From socket write to NIC, the sk_buff, netfilter hook points, conntrack and where iptables rules run.",
+          keys:"socket sk_buff netfilter hook prerouting postrouting nat conntrack iptables nftables tc qdisc napi rss",
+          xref:[{course:"kubernetes", n:10, why:"kube-proxy writes rules into these exact chains"},
+                {course:"the-wire", n:20, why:"where firewalling and segmentation attach"}] },
+        { n:16, file:"16-elf-linking.html", title:"ELF, linking and loading", soon:true,
+          desc:"Sections and segments, static versus dynamic linking, the dynamic linker, PLT and GOT, LD_PRELOAD.",
+          keys:"elf section segment static dynamic linking ld.so plt got relocation symbol ld_preload rpath strip" },
+        { n:17, file:"17-proc-sys.html", title:"/proc and /sys", soon:true,
+          desc:"Where every monitoring tool gets its numbers, and how to read them without a tool at all.",
+          keys:"proc sys procfs sysfs pid status maps fd smaps stat meminfo cgroup sysctl top ps monitoring" },
+        { n:18, file:"18-ebpf.html", title:"eBPF", soon:true,
+          desc:"The verifier, maps, program types and attach points, plus bpftrace one-liners worth keeping.",
+          keys:"ebpf bpf verifier map kprobe uprobe tracepoint xdp tc bpftrace bcc observability cilium" },
+        { n:19, file:"19-performance.html", title:"Performance methodology", soon:true,
+          desc:"The USE method, flame graphs, perf, and telling a latency problem from a throughput problem.",
+          keys:"performance use method utilisation saturation errors flame graph perf latency throughput percentile off-cpu" },
+        { n:20, file:"20-boot.html", title:"Boot", soon:true,
+          desc:"Firmware to bootloader to kernel to initramfs to PID 1, and what systemd does with the units it finds.",
+          keys:"boot uefi bios grub kernel initramfs pid 1 systemd unit target dependency cgroup slice journald" }
+      ],
+      appendix: [
+        { file:"appendix-commands.html", title:"Command reference", desc:"The diagnostic commands worth memorising, grouped by subsystem.", soon:true }
+      ]
+    }
+  ]
+};
+
+/* Resolve the course this page belongs to. Pages set window.COURSE_ID. */
+window.getCourse = function (id) {
+  id = id || window.COURSE_ID;
+  return LIBRARY.courses.filter(function (c) { return c.id === id; })[0] || null;
+};
+
+</script>
+<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>
+/* Shared behaviour for every page in the library.
+   Pages declare where they are with:
+     window.COURSE_ID  = "linux"            (course landing and chapters)
+     document.body.dataset.chapter = "10"   (chapter pages only)
+     window.DEPTH      = 0 | 1 | 2          (folders below the library root)
+*/
+(function () {
+  'use strict';
+
+  var DEPTH = (typeof window.DEPTH === 'number') ? window.DEPTH : 0;
+  var UP = new Array(DEPTH + 1).join('../');
+
+  /* ---------- progress, namespaced per course ---------- */
+  var mem = {};
+  function key(cid) { return 'library.progress.' + cid + '.v1'; }
+  function read(cid) { try { return JSON.parse(localStorage.getItem(key(cid))) || {}; } catch (e) { return mem[cid] || {}; } }
+  function save(cid, o) { mem[cid] = o; try { localStorage.setItem(key(cid), JSON.stringify(o)); } catch (e) {} }
+
+  window.Progress = {
+    all:    function (cid) { return read(cid || window.COURSE_ID); },
+    isDone: function (n, cid) { return !!read(cid || window.COURSE_ID)[n]; },
+    set:    function (n, v, cid) {
+      cid = cid || window.COURSE_ID;
+      var o = read(cid); if (v) o[n] = 1; else delete o[n]; save(cid, o);
+    },
+    reset:  function (cid) { save(cid || window.COURSE_ID, {}); },
+    count:  function (cid) { return Object.keys(read(cid)).length; }
+  };
+
+  /* ---------- lab copy buttons ---------- */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-copy]');
+    if (!b) return;
+    var txt = b.closest('.lab').querySelector('pre').innerText;
+    var done = function () { var o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1400); };
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).then(done, done);
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+
+  /* ---------- quiz ---------- */
+  document.addEventListener('click', function (e) {
+    var opt = e.target.closest('.opt');
+    if (!opt) return;
+    var q = opt.closest('.q');
+    if (q.dataset.answered) return;
+    q.dataset.answered = '1';
+    var opts = Array.prototype.slice.call(q.querySelectorAll('.opt'));
+    var right = parseInt(q.dataset.answer, 10);
+    opts.forEach(function (o, i) { if (i === right) o.classList.add('right'); });
+    if (opts.indexOf(opt) !== right) opt.classList.add('wrong');
+    var why = q.querySelector('.why');
+    if (why) why.classList.add('show');
+  });
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  /* ---------- side navigation ---------- */
+  function buildNav() {
+    var host = document.getElementById('side');
+    if (!host || !window.LIBRARY) return;
+
+    var course = window.getCourse();
+    if (!course) return;
+
+    var cur = parseInt(document.body.dataset.chapter, 10) || 0;
+    var inChapters = !!document.body.dataset.chapter;
+    var chPre = inChapters ? '' : 'chapters/';
+    var courseHome = inChapters ? '../index.html' : 'index.html';
+
+    var switcher = LIBRARY.courses.map(function (c) {
+      var href = UP + c.slug + '/index.html';
+      return '<a class="cswitch' + (c.id === course.id ? ' on' : '') + '" href="' + href + '">' +
+             '<span class="cs-t">' + c.title + '</span>' +
+             '<span class="cs-s">' + c.subtitle + '</span></a>';
+    }).join('');
+
+    host.innerHTML =
+      '<a class="liblink" href="' + UP + 'index.html">&larr; ' + LIBRARY.title + '</a>' +
+      '<a class="brand" href="' + courseHome + '">' +
+        '<span class="bt">' + course.title + '</span>' +
+        '<span class="bs">' + course.subtitle + '</span></a>' +
+      '<button class="navtoggle" id="navtoggle">Contents &amp; search</button>' +
+      '<div class="navbody" id="navbody">' +
+        '<div class="cswitchwrap">' + switcher + '</div>' +
+        '<div class="navsearch"><span class="gl">&#9906;</span>' +
+          '<input id="navq" type="search" placeholder="Search this course" autocomplete="off"></div>' +
+        '<div class="navprog"><div class="bar"><div class="fill" id="navfill"></div></div>' +
+          '<div class="txt"><span id="navpt"></span><button id="navreset">Reset</button></div></div>' +
+        '<div id="navlists"></div>' +
+      '</div>';
+
+    var qEl = host.querySelector('#navq');
+
+    function renderLists() {
+      var f = qEl.value.trim().toLowerCase(), html = '', shown = 0;
+
+      course.parts.forEach(function (p) {
+        var chs = course.chapters.filter(function (c) {
+          if (c.n < p.range[0] || c.n > p.range[1]) return false;
+          if (!f) return true;
+          return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
+        });
+        if (!chs.length) return;
+        shown += chs.length;
+        html += '<p class="navpart">' + p.id + ' &middot; ' + p.name + '</p><ul class="navlist">';
+        chs.forEach(function (c) {
+          var cls = 'navlink' + (c.n === cur ? ' here' : '') +
+            (Progress.isDone(c.n, course.id) ? ' is-done' : '') + (c.soon ? ' is-soon' : '');
+          var inner = '<span class="nn">' + pad(c.n) + '</span><span>' + c.title + '</span>';
+          html += '<li>' + (c.soon ? '<span class="' + cls + '">' + inner + '</span>'
+                                   : '<a class="' + cls + '" href="' + chPre + c.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      });
+
+      var apx = (course.appendix || []).filter(function (a) {
+        return !f || (a.title + ' ' + a.desc).toLowerCase().indexOf(f) > -1;
+      });
+      if (apx.length) {
+        shown += apx.length;
+        html += '<p class="navpart">Appendix</p><ul class="navlist">';
+        apx.forEach(function (a) {
+          var inner = '<span class="nn">&mdash;</span><span>' + a.title + '</span>';
+          html += '<li>' + (a.soon ? '<span class="navlink is-soon">' + inner + '</span>'
+                                   : '<a class="navlink" href="' + chPre + a.file + '">' + inner + '</a>') + '</li>';
+        });
+        html += '</ul>';
+      }
+
+      if (!shown) html = '<p class="navempty">No chapter in this course matches. Search covers titles, summaries and keywords.</p>';
+      host.querySelector('#navlists').innerHTML = html;
+
+      var here = host.querySelector('.navlink.here');
+      if (here && !f) {
+        var top = here.offsetTop - host.clientHeight / 2;
+        if (top > 0) host.scrollTop = top;
+      }
+      if (typeof window.onCourseFilter === 'function') window.onCourseFilter(f);
+    }
+
+    function renderProgress() {
+      var n = Progress.count(course.id), t = course.chapters.length;
+      host.querySelector('#navfill').style.width = (n / t * 100) + '%';
+      host.querySelector('#navpt').textContent = n + ' / ' + t + ' complete';
+    }
+
+    qEl.addEventListener('input', renderLists);
+    host.querySelector('#navreset').addEventListener('click', function () {
+      Progress.reset(course.id); renderLists(); renderProgress();
+    });
+    host.querySelector('#navtoggle').addEventListener('click', function () {
+      host.querySelector('#navbody').classList.toggle('open');
+    });
+
+    window.refreshCourseNav = function () { renderLists(); renderProgress(); };
+    renderLists(); renderProgress();
+  }
+
+  /* ---------- chapter prev/next and completion ---------- */
+  function chapterChrome() {
+    var n = parseInt(document.body.dataset.chapter, 10);
+    var course = window.getCourse && window.getCourse();
+    if (!n || !course) return;
+
+    var chs = course.chapters;
+    var i = chs.findIndex(function (c) { return c.n === n; });
+    var prev = chs[i - 1], next = chs[i + 1], cur = chs[i];
+
+    function link(c, dir) {
+      if (!c) return '<span></span>';
+      var label = (dir === 'prev' ? '\u2190 ' : '') + pad(c.n) + ' \u00B7 ' + c.title + (dir === 'next' ? ' \u2192' : '');
+      return c.soon ? '<span style="opacity:.45">' + label + '</span>'
+                    : '<a href="' + c.file + '">' + label + '</a>';
+    }
+
+    var top = document.querySelector('.chapnav');
+    if (top) top.innerHTML = link(prev, 'prev') + '<a href="../index.html">All chapters</a>' + link(next, 'next');
+
+    var foot = document.querySelector('.chapfoot');
+    if (foot) foot.innerHTML = link(prev, 'prev') + link(next, 'next');
+
+    var db = document.querySelector('.donebar');
+    if (db) {
+      db.innerHTML = '<label><input type="checkbox" id="doneck"> Mark chapter ' + n + ', ' + cur.title + ', as complete</label>';
+      var ck = db.querySelector('#doneck');
+      ck.checked = Progress.isDone(n, course.id);
+      ck.addEventListener('change', function () {
+        Progress.set(n, ck.checked, course.id);
+        if (window.refreshCourseNav) window.refreshCourseNav();
+      });
+    }
+  }
+
+  /* ---------- cross-course reference rendering ---------- */
+  window.xrefHTML = function (c, fromCourseId) {
+    if (!c.xref || !c.xref.length) return '';
+    return '<span class="xrefs">' + c.xref.map(function (x) {
+      var tc = window.getCourse(x.course);
+      if (!tc) return '';
+      var tch = tc.chapters.filter(function (y) { return y.n === x.n; })[0];
+      if (!tch) return '';
+      var href = UP + tc.slug + '/chapters/' + tch.file;
+      var label = tc.subtitle + ' \u00B7 ' + pad(x.n) + ' ' + tch.title;
+      return '<span class="xref">' + (tch.soon
+        ? '<span class="xr-dead">' + label + '</span>'
+        : '<a href="' + href + '">' + label + '</a>') +
+        '<span class="xr-why">' + x.why + '</span></span>';
+    }).join('') + '</span>';
+  };
+
+  function init() { buildNav(); chapterChrome(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+</script>
+</body>
+</html>
