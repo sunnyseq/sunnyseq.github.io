@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>20 · Network security — The Wire</title>
+<title>8 · Container runtimes — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -298,7 +298,7 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-the-wire" data-chapter="20">
+<body class="course-kubernetes" data-chapter="8">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
@@ -306,323 +306,196 @@ svg{max-width:100%;height:auto;display:block}
 <nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part V &nbsp;·&nbsp; Applied and operational &nbsp;·&nbsp; Chapter 20</p>
-  <h1>Network security</h1>
-  <p class="lede">Chapter 2 put an attacker at points on a path. This chapter is about the controls that go at those points — which layer each one attaches to, what it can and cannot see there, and why the industry spent thirty years defending a perimeter before concluding there wasn't one.</p>
+  <p class="eyebrow">Part II &nbsp;&middot;&nbsp; Scheduling and lifecycle &nbsp;&middot;&nbsp; Chapter 08</p>
+  <h1>Container runtimes</h1>
+  <p class="lede">Somewhere below every 'start this container' call sits an interface, two specifications, and a filesystem trick that lets a thousand containers share almost everything they need without copying it once. This chapter is that stack, from the kubelet's request down to a process the kernel actually runs.</p>
 </header>
 
 <div class="col">
 
-<h2>20.1 Where security attaches</h2>
+<h2>8.1 The interface that ended the runtime wars</h2>
 
-<p>The layer a control lives at determines what it can see and what it can protect. Get this wrong and you deploy something that cannot possibly do what you wanted.</p>
+<p>Early Kubernetes talked to Docker directly, through code baked into the kubelet itself. Every alternative runtime someone wanted to use — and there were real reasons to want alternatives, from security isolation to raw performance — meant patching the kubelet's own source. The <strong>Container Runtime Interface (CRI)</strong> replaced that with a gRPC API the kubelet speaks to <em>any</em> compliant runtime: a small, stable set of calls — <code>RunPodSandbox</code>, <code>CreateContainer</code>, <code>StartContainer</code>, <code>StopContainer</code>, image pull and status calls — that the kubelet issues without knowing or caring which runtime is on the other end.</p>
+
+<p>This is the same architectural move Chapter 2 described for the API server: push every runtime-specific detail behind one stable interface, so the two sides can evolve independently. It is also why "which container runtime does this cluster use" stopped being a question with implications for the rest of Kubernetes — containerd, CRI-O, and others are all just CRI implementations, interchangeable from the kubelet's point of view.</p>
+
+<pre><code>kubelet  --(CRI, gRPC)-->  containerd  --(OCI runtime spec)-->  runc  --(syscalls)-->  kernel
+                                │
+                                └── containerd-shim, one per container,
+                                    keeps it alive if containerd itself restarts</code></pre>
+
+<h2>8.2 Two specs, two different jobs</h2>
+
+<p>"OCI" names two separate specifications that are easy to conflate because both ship under the same umbrella and both matter to every container that runs.</p>
+
+<table>
+<thead><tr><th>Spec</th><th>Answers</th><th>Consumed by</th></tr></thead>
+<tbody>
+<tr><td><strong>OCI Image Spec</strong></td><td>What does a container image look like on disk — layers, a manifest, a config blob describing the entrypoint and environment</td><td>Registries, and whatever pulls and unpacks an image (containerd's own pull path)</td></tr>
+<tr><td><strong>OCI Runtime Spec</strong></td><td>Given an already-unpacked root filesystem and a JSON config, how do you actually start it as an isolated process — namespaces, cgroups, mounts, capabilities</td><td>The low-level runtime — <code>runc</code>, or an alternative like <code>crun</code> or <code>gVisor</code></td></tr>
+</tbody>
+</table>
+
+<p>containerd's job is the bridge between them: pull an OCI image, unpack its layers into a root filesystem, translate the result into an OCI runtime spec's <code>config.json</code>, then hand that to <code>runc</code>, which does the actual namespace and cgroup setup and executes the process. Nothing about the image format has anything to say about how isolation is implemented, and nothing about the runtime spec knows what a registry or an image layer is — that separation is deliberate, and it is what lets something like <code>gVisor</code> or <code>Kata Containers</code> swap in as a drastically different runtime — a sandboxed VM, in Kata's case — while still consuming the exact same OCI Runtime Spec config that <code>runc</code> does.</p>
+
+<h2>8.3 Layers, and why a pull is rarely a full download</h2>
+
+<p>An image is not one blob — it is an ordered stack of layers, each one a filesystem diff, referenced by content-addressable digest. Two images sharing a base layer (the same <code>python:3.12-slim</code>, say) share that layer's actual bytes on disk and on the wire; a node that already has it cached pulls nothing for that layer at all, regardless of which image asked for it.</p>
 
 <div class="demo">
-  <div class="demohead"><span>Interactive · the stack, and what each layer can see</span><span id="lystat">Click a layer</span></div>
+  <div class="demohead"><span>Interactive · image pull, layer by layer</span><span id="pullstat">idle</span></div>
   <div class="demobody">
-    <svg viewBox="0 0 700 290" role="img" aria-label="Network stack with security controls per layer">
-      <defs><style>
-        .lay{fill:#fff;stroke:#DCDDD4;stroke-width:1.5;cursor:pointer}
-        .lay:hover{stroke:#1B4FD8;stroke-width:2.5}
-        .lay.sel{stroke:#1B4FD8;stroke-width:3;fill:#F4F7FF}
-        .lt{font:700 11.5px 'Space Grotesk',sans-serif;fill:#14161A;pointer-events:none}
-        .ls{font:400 9px 'JetBrains Mono',monospace;fill:#4A4F58;pointer-events:none}
-        .lc{font:400 9px 'JetBrains Mono',monospace;fill:#0F6E8C;pointer-events:none}
-      </style></defs>
-      <g id="lyg"></g>
-    </svg>
-    <div class="out" id="lyout" style="margin-top:14px">Click a layer to see what a control there can observe, what it can protect, and what is invisible to it.</div>
+    <div class="ctl">
+      <label>Node cache already has</label>
+      <button class="chip on" data-layer="base">base:alpine</button>
+      <button class="chip" data-layer="runtime">runtime:python3.12</button>
+      <button class="chip" id="pullgo">Pull myapp:v3</button>
+      <button class="chip" id="pullreset">Reset cache</button>
+    </div>
+    <div class="out" id="pullout">myapp:v3 = base:alpine + runtime:python3.12 + deps:sha91a + app:sha77f. Click "Pull" to see which layers actually transfer.</div>
   </div>
-  <div class="demonote">The recurring mistake is placing a control at a layer that cannot see what you asked it to inspect — a network firewall cannot read an encrypted payload, and an application check cannot stop a packet that never reaches it.</div>
+  <div class="demonote">This is why a CI pipeline that rebuilds only application code, on top of a stable, widely-used base image, produces near-instant deploys across a fleet: every node has almost every layer already, and the pull is really just the last one or two.</div>
 </div>
 
-<h2>20.2 Firewalls, and what they actually decide</h2>
+<script>
+(function(){
+  var LAYERS = [
+    {id:'base', name:'base:alpine', size:'2.7 MB'},
+    {id:'runtime', name:'runtime:python3.12', size:'48 MB'},
+    {id:'deps', name:'deps:sha91a (pip installs)', size:'116 MB'},
+    {id:'app', name:'app:sha77f (your code)', size:'0.4 MB'}
+  ];
+  var cache = {base:true};
+  var out = document.getElementById('pullout');
+  var stat = document.getElementById('pullstat');
 
-<table>
-<thead><tr><th>Type</th><th>Decides on</th><th>Blind to</th></tr></thead>
-<tbody>
-<tr><td>Packet filter</td><td>IP, port, protocol, flags</td><td>Everything about the conversation</td></tr>
-<tr><td>Stateful</td><td>The above plus connection state, so replies to outbound flows are allowed</td><td>Payload contents</td></tr>
-<tr><td>Application / L7</td><td>HTTP methods, paths, headers, bodies</td><td>Anything encrypted, unless it terminates TLS</td></tr>
-<tr><td>Identity-aware</td><td>The authenticated workload or user</td><td>Nothing relevant — but requires an identity system (Ch. 16)</td></tr>
-</tbody>
-</table>
+  document.querySelectorAll('[data-layer]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var id = b.dataset.layer;
+      cache[id] = !cache[id];
+      b.classList.toggle('on', cache[id]);
+    });
+  });
+  document.getElementById('pullreset').addEventListener('click', function(){
+    cache = {};
+    document.querySelectorAll('[data-layer]').forEach(function(b){ b.classList.remove('on'); });
+    stat.textContent = 'idle';
+    out.textContent = 'Cache cleared. Every layer will need to be pulled.';
+  });
+  document.getElementById('pullgo').addEventListener('click', function(){
+    var lines = [], totalNeeded = 0, totalSkipped = 0;
+    LAYERS.forEach(function(l){
+      if (cache[l.id]) {
+        lines.push('<span style="color:#0B8A5B">✓ already present</span> — '+l.name+' ('+l.size+' not transferred)');
+        totalSkipped++;
+      } else {
+        lines.push('<span style="color:#0F6E8C">⬇ pulling</span> — '+l.name+' ('+l.size+')');
+        cache[l.id] = true;
+        totalNeeded++;
+      }
+    });
+    stat.textContent = totalNeeded + ' of ' + LAYERS.length + ' layers pulled';
+    out.innerHTML = lines.join('<br>') + '<br><br><strong>'+totalNeeded+' layer(s) transferred, '+totalSkipped+' already local.</strong>';
+    document.querySelectorAll('[data-layer]').forEach(function(b){ b.classList.add('on'); });
+  });
+})();
+</script>
 
-<p>Two things worth stating plainly. <strong>Egress filtering is usually more valuable than ingress filtering</strong>, and almost nobody does it. Ingress rules stop the initial intrusion, which is the part you were already thinking about. Egress rules stop the parts you were not: command-and-control callbacks, data exfiltration, and SSRF reaching your metadata endpoint (Ch. 18). Every serious breach involves data leaving.</p>
+<h2>8.4 Snapshotters: unpacking layers without copying them twice</h2>
 
-<p>And <strong>a firewall rule is an assertion about topology, not identity.</strong> "10.0.4.0/24 may reach the database" is true only while that range contains what you think it contains — which in a cluster with recycled pod IPs may be true for minutes.</p>
+<p>Downloading layers is only half the work — they also need to be assembled into the single root filesystem a container actually runs against, without duplicating every shared layer's bytes on disk for every container that uses it. This is a <strong>snapshotter</strong>'s job, and <code>overlayfs</code> is the default on Linux: each layer is a read-only directory, and containerd stacks them with an overlay union mount that presents them as one filesystem, adding one thin writable layer on top for whatever the running container actually changes.</p>
 
-<h2>20.3 Where the rules actually run</h2>
+<p>Nothing is copied to build this stack — the underlying layer directories are shared, read-only, across every container using them, and only writes go anywhere new. This is also precisely why a container's filesystem changes vanish when the container is removed unless a volume was explicitly mounted over the relevant path: the writable layer is deleted along with the container, and the read-only layers underneath were never touched in the first place.</p>
 
-<p>On Linux, packet filtering happens in netfilter hooks inside the kernel. Understanding the hook order explains a great deal of otherwise baffling behaviour:</p>
-
-<pre><code>                                  ┌─────────────┐
-   PREROUTING ──► routing ──────► │   FORWARD   │ ──► POSTROUTING ──► out
-   (DNAT)         decision   │    └─────────────┘         (SNAT)
-                             │
-                             ▼
-                          INPUT ──► local process ──► OUTPUT
-                                                        │
-                                                        ▼
-                                                  routing again</code></pre>
-
-<p>Destination NAT happens in PREROUTING, <em>before</em> the routing decision — which is why a rule matching the original destination address in INPUT will never fire once DNAT has rewritten it. This is exactly the machinery a Kubernetes Service uses: kube-proxy writes DNAT rules translating a virtual ClusterIP into a real pod IP, and conntrack keeps the reverse mapping so replies find their way back.</p>
-
-<div class="callout">
-  <span class="tag">Conntrack is a table with a size</span>
-  <p>Stateful filtering means the kernel keeps an entry per flow. That table is finite, and when it fills, new connections are dropped — with a log line most people have never read. Under a SYN flood, or simply at high connection churn, `nf_conntrack: table full, dropping packet` is a self-inflicted outage that looks exactly like a network fault. Size it deliberately on anything handling significant connection rates.</p>
-</div>
-
-<h2>20.4 VPNs, and what they really give you</h2>
-
-<table>
-<thead><tr><th></th><th>IPsec</th><th>WireGuard</th><th>TLS-based (OpenVPN)</th></tr></thead>
-<tbody>
-<tr><td>Layer</td><td>3 — network</td><td>3 — network</td><td>4/7 — over TCP or UDP</td></tr>
-<tr><td>Complexity</td><td>High — IKE, SAs, transport vs tunnel mode</td><td><strong>Low</strong> — ~4,000 lines, one cipher suite</td><td>Moderate</td></tr>
-<tr><td>Crypto agility</td><td>Negotiable, which means downgradable</td><td>None by design; version the protocol instead</td><td>Negotiable</td></tr>
-<tr><td>Identity</td><td>Certificates or pre-shared keys</td><td>Public keys, pinned on both sides</td><td>Certificates</td></tr>
-</tbody>
-</table>
-
-<p>WireGuard is the interesting case for this course, because its design applies every lesson from Part IV. <strong>No negotiation at all</strong> — one key exchange, one cipher, one hash. Removing choice removes downgrade attacks, exactly as TLS 1.3 concluded (Ch. 13). It is silent to unauthenticated packets, so it does not respond to scans. And it is small enough to audit, which after Heartbleed (Ch. 17) is a security property in itself.</p>
-
-<p>The honest caveat about VPNs generally: <strong>a VPN moves the trust boundary, it does not remove it.</strong> Your traffic is protected from the local network and fully visible to the VPN operator. For a corporate tunnel that is the intent. For a consumer product advertising privacy, you have swapped an ISP you have a contract with for a company you know nothing about.</p>
-
-<h2>20.5 DNS</h2>
-
-<p>DNS is unauthenticated and unencrypted by default, and those are two separate problems with two separate solutions that people constantly confuse.</p>
-
-<ul>
-<li><strong>DNSSEC</strong> signs records, providing <em>authenticity</em>. It proves an answer came from the zone owner and was not forged. It does <strong>not</strong> encrypt anything — every query and answer remains fully visible.</li>
-<li><strong>DoH / DoT</strong> encrypt the query between you and your resolver, providing <em>confidentiality</em> on that hop. They say nothing about whether the resolver's answer is genuine, and the resolver still sees every name you look up.</li>
-</ul>
-
-<p>They compose: DNSSEC for authenticity end to end, DoH or DoT for confidentiality on the first hop. Neither hides your queries from the resolver operator, which is the trade DoH makes — moving visibility from your ISP to whoever runs the resolver your browser chose.</p>
-
-<p>Two DNS records this course has already leaned on: <strong>CAA</strong> restricting which CAs may issue for your domain (Ch. 10), and the <strong>HTTPS resource record</strong> carrying ECH keys (Ch. 14). Both make DNS part of your certificate security posture, which is worth remembering when deciding who can edit your zone.</p>
-
-<h2>20.6 Zero Trust</h2>
-
-<p>The perimeter model assumed a trusted inside and a hostile outside. Three things dissolved it: cloud services that live outside your network, remote work that puts users outside it, and lateral movement that makes "inside" meaningless once one host falls.</p>
-
-<p>Zero Trust replaces location-based trust with identity-based trust. The principles, stripped of vendor language:</p>
-
-<ul>
-<li><strong>No implicit trust from network position.</strong> Being on the corporate LAN or inside the VPC grants nothing.</li>
-<li><strong>Authenticate and authorise every request</strong>, not every session, and not at the perimeter (Ch. 19).</li>
-<li><strong>Identity is the workload or the user</strong>, cryptographically proven — which in practice means mTLS with workload certificates (Ch. 16).</li>
-<li><strong>Encrypt everything in transit</strong>, including internal traffic. Chapter 1's TB-2.</li>
-<li><strong>Least privilege, continuously evaluated</strong>, with device posture and context feeding the decision.</li>
-<li><strong>Assume breach.</strong> Design so that one compromised workload yields as little as possible.</li>
-</ul>
-
-<div class="callout warn">
-  <span class="tag">What Zero Trust is not</span>
-  <p>It is not a product, and buying a proxy does not deliver it. It is also not an argument for abandoning network controls — defence in depth still applies, and network policy remains one of the cheapest, most reliable layers you have precisely because it fails independently of your application code (Ch. 1, 18). The change is that the network is no longer permitted to be the <em>only</em> control, or the basis of an identity claim.</p>
-</div>
-
-<h2>20.7 Lab</h2>
+<h2>8.5 Lab · watch CRI calls and layers from outside containerd</h2>
 
 <div class="lab">
-  <div class="labhead"><span>Shell · inspect the stack</span><button data-copy>Copy</button></div>
-<pre><code># What is listening, and on which interface? 0.0.0.0 means the world.
-ss -tlnp 2>/dev/null | awk 'NR==1 || /LISTEN/'
+  <div class="labhead"><span>Shell · crictl, the CRI-native equivalent of docker CLI commands</span><button data-copy>Copy</button></div>
+<pre><code># crictl talks CRI directly — this is genuinely what the kubelet is calling
+crictl ps                       # running containers, per the runtime, not the API server
+crictl pods                     # pod sandboxes — the shared network namespace CRI creates per pod
+crictl images                   # what's actually cached on this node right now
 
-# Netfilter rules as the kernel sees them, by hook
-sudo nft list ruleset 2>/dev/null | head -40 \
-  || sudo iptables -L -n -v --line-numbers
+# Pull, and watch layer-level reuse for yourself
+crictl pull docker.io/library/python:3.12-slim
+crictl imagefs-info | jq .      # disk usage of the image store, snapshotter included
 
-# NAT rules \u2014 in a Kubernetes node this is mostly kube-proxy's work (Ch. 22)
-sudo iptables -t nat -L PREROUTING -n | head -20
+# Inspect the actual OCI runtime spec containerd handed to runc for a
+# running container — this is the literal config.json from 8.2
+crictl inspect <container-id> | jq '.info.runtimeSpec.linux.namespaces'
+crictl inspect <container-id> | jq '.info.runtimeSpec.linux.resources'
 
-# Conntrack: current usage against the limit. A full table drops new connections.
-cat /proc/sys/net/netfilter/nf_conntrack_count /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null
-sudo conntrack -L 2>/dev/null | head -5
+# Confirm which runtime a cluster is actually using — the same CRI
+# regardless of the answer
+kubectl get node node-1 -o jsonpath='{.status.nodeInfo.containerRuntimeVersion}'
 
-# Trace the path and see where control changes hands
-mtr -rwc 10 example.com 2>/dev/null || traceroute example.com
-
-# DNS: is the answer authenticated? Look for the 'ad' flag.
-dig +dnssec +multi example.com A | grep -E 'flags:|RRSIG'
-dig +dnssec cloudflare.com A | grep -c RRSIG
-#   'ad' in the flags = your resolver validated DNSSEC. No RRSIG = zone unsigned.
-
-# Is your query encrypted on the first hop? Compare plain DNS with DoH.
-sudo tcpdump -i any -n 'port 53' -c 5 &amp; sleep 1; dig +short example.com; sleep 1; kill %1
-curl -s -H 'accept: application/dns-json' \
-  'https://cloudflare-dns.com/dns-query?name=example.com&type=A' | python3 -m json.tool
-#   The first is readable on the wire. The second is inside TLS.
-
-# What does your resolver actually do?
-resolvectl status 2>/dev/null | grep -E 'DNS Servers|DNSSEC|DNSOverTLS' || cat /etc/resolv.conf
-
-# WireGuard: the entire configuration surface, which is the point
-wg genkey | tee priv.key | wg pubkey > pub.key
-cat <<'CONF'
-[Interface]
-PrivateKey = <priv>
-Address    = 10.10.0.2/32
-[Peer]
-PublicKey  = <peer pub>          # pinned. no negotiation, no CA, no cipher list.
-AllowedIPs = 10.10.0.0/24
-Endpoint   = vpn.example:51820
-PersistentKeepalive = 25
-CONF
-
-# Egress: can this host reach things it should not?
-for t in 169.254.169.254 10.0.0.1 8.8.8.8; do
-  printf '%-18s ' "$t"
-  timeout 2 bash -c "echo > /dev/tcp/$t/80" 2>/dev/null &amp;&amp; echo REACHABLE || echo blocked
-done
-#   169.254.169.254 reachable from an app that fetches user URLs is the
-#   Capital One breach waiting to happen (Ch. 18).</code></pre>
+# See the layer stack of a local image directly
+crictl inspecti python:3.12-slim | jq '.status.size, .info.imageSpec'</code></pre>
 </div>
 
 <div class="quiz">
   <h3>Knowledge check</h3>
 
-  <div class="q" data-answer="1">
-    <p class="qtext">What does DNSSEC provide that DoH does not?</p>
+  <div class="q" data-answer="2">
+    <p class="qtext">What problem did the Container Runtime Interface (CRI) actually solve?</p>
     <div class="opts">
-      <button class="opt">Confidentiality of queries from your ISP</button>
-      <button class="opt">Authenticity — proof that the answer genuinely came from the zone owner</button>
-      <button class="opt">Faster resolution</button>
-      <button class="opt">Protection from the resolver operator</button>
+      <button class="opt">It made container images smaller by introducing layer compression</button>
+      <button class="opt">It replaced runc with a faster low-level runtime</button>
+      <button class="opt">It decoupled the kubelet from any specific runtime's implementation details, so alternative runtimes no longer required patching kubelet source code</button>
+      <button class="opt">It added support for Windows containers for the first time</button>
     </div>
-    <p class="why">Two different properties. DNSSEC signs records so a forged answer is detectable, and encrypts nothing. DoH encrypts the query to your resolver and says nothing about whether the answer is genuine. They compose, and neither hides your queries from the resolver itself.</p>
+    <p class="why">Before CRI, runtime-specific logic lived inside the kubelet itself, so any alternative runtime meant changing kubelet code. CRI is a stable gRPC interface that any compliant runtime implements, letting the kubelet stay runtime-agnostic — architecturally the same move the API server makes for cluster state in Chapter 2.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">Which pairing correctly matches an OCI specification to the layer of the system that actually consumes it?</p>
+    <div class="opts">
+      <button class="opt">OCI Runtime Spec — consumed by container registries when serving image pulls</button>
+      <button class="opt">OCI Image Spec — consumed by whatever pulls and unpacks the image; OCI Runtime Spec — consumed by the low-level runtime (runc or an alternative) that actually creates the isolated process</button>
+      <button class="opt">Both specs are consumed exclusively by the kubelet, never by containerd or runc directly</button>
+      <button class="opt">OCI Image Spec describes cgroup and namespace configuration</button>
+    </div>
+    <p class="why">The Image Spec is about what a container looks like at rest — layers, manifest, config blob. The Runtime Spec is about turning an already-unpacked filesystem into a running, isolated process — namespaces, cgroups, mounts. containerd bridges the two; runc (or a swap-in like gVisor or Kata) only ever sees the runtime spec side.</p>
   </div>
 
   <div class="q" data-answer="3">
-    <p class="qtext">Why is egress filtering often more valuable than ingress filtering?</p>
+    <p class="qtext">Two images on the same node share an identical base layer. A node that already has that base layer cached pulls a new image built on it. What happens to that shared layer?</p>
     <div class="opts">
-      <button class="opt">It is easier to configure</button>
-      <button class="opt">Inbound traffic is already encrypted</button>
-      <button class="opt">It reduces bandwidth costs</button>
-      <button class="opt">It constrains what an attacker can do after a compromise — command-and-control, exfiltration, and SSRF reaching internal endpoints</button>
+      <button class="opt">It is re-downloaded and stored as a separate copy per image, for isolation</button>
+      <button class="opt">It is downloaded once more to verify its digest, then discarded</button>
+      <button class="opt">Only the newest layer's metadata is downloaded; the base layer's actual filesystem content is fully re-fetched in the background</button>
+      <button class="opt">It is not re-downloaded at all — the already-cached layer, identified by its content digest, is reused as-is by the new image's pull</button>
     </div>
-    <p class="why">Ingress rules address the intrusion you were already thinking about. Egress rules address everything after it, and every serious breach involves data leaving. Blocking an application from reaching the metadata endpoint turns an SSRF bug into a non-event without requiring the code to be correct.</p>
+    <p class="why">Layers are content-addressable and shared across any image that references the same digest. A pull only fetches layers the node doesn't already have; a cached base layer is reused untouched, which is why images sharing a common, already-deployed base pull dramatically faster than their total uncompressed size would suggest.</p>
   </div>
 
   <div class="q" data-answer="0">
-    <p class="qtext">Why does WireGuard deliberately offer no cryptographic negotiation?</p>
+    <p class="qtext">A running container writes a large temporary file to its own filesystem (no volume mounted at that path), then the container is deleted. What happens to that file?</p>
     <div class="opts">
-      <button class="opt">Removing choice removes downgrade attacks — the same conclusion TLS 1.3 reached</button>
-      <button class="opt">Negotiation is too slow for a VPN</button>
-      <button class="opt">Its ciphers are too new to have alternatives</button>
-      <button class="opt">To reduce packet size</button>
+      <button class="opt">It is deleted along with the container's thin writable layer — the read-only image layers beneath it were never touched and remain shared and unaffected</button>
+      <button class="opt">It persists on the node's disk indefinitely, orphaned</button>
+      <button class="opt">It gets merged into the image's layer cache for future containers to reuse</button>
+      <button class="opt">It is preserved automatically in a hidden overlay snapshot</button>
     </div>
-    <p class="why">Every legacy option retained for compatibility is something an attacker can steer you toward (Ch. 2, 13). WireGuard fixes one key exchange, one cipher and one hash, and versions the whole protocol if they need to change. The small codebase is a second security property — after Heartbleed, auditability counts.</p>
-  </div>
-
-  <div class="q" data-answer="2">
-    <p class="qtext">A firewall rule allows <code>10.0.4.0/24</code> to reach the database. What is the fundamental weakness?</p>
-    <div class="opts">
-      <button class="opt">CIDR notation is ambiguous</button>
-      <button class="opt">The rule cannot inspect encrypted traffic</button>
-      <button class="opt">It asserts something about topology, not identity — the range's contents change, and any compromised workload in it inherits the access</button>
-      <button class="opt">IPv6 traffic bypasses it</button>
-    </div>
-    <p class="why">The rule is only as meaningful as the stability of what lives in that range, and in a cluster with recycled pod IPs that may be minutes. It also grants access to <em>anything</em> that lands there, compromised or not. Zero Trust's answer is to authenticate the workload cryptographically (Ch. 16) and keep the network rule as an independent second layer.</p>
+    <p class="why">The overlay snapshotter gives every container exactly one writable layer, stacked on top of shared, read-only image layers. Anything the container writes lands only in that thin top layer, which is discarded when the container is removed — the underlying shared layers, used by every other container built from the same image, are never modified.</p>
   </div>
 </div>
 
-<h2>20.8 Carry forward</h2>
+<h2>8.6 What to carry into Chapter 9</h2>
 <ul>
-<li>A control can only act on what its layer can see. Match the control to the layer.</li>
-<li>Egress filtering constrains the attacker after a compromise, and is widely neglected.</li>
-<li>DNAT happens before routing; conntrack tables are finite and fill.</li>
-<li>A VPN relocates trust rather than removing it.</li>
-<li>DNSSEC is authenticity, DoH is confidentiality. Different problems.</li>
-<li>Zero Trust replaces location-based trust with proven identity — and keeps the network layer as defence in depth, not as the identity claim.</li>
+<li>CRI is a stable gRPC interface between the kubelet and any compliant runtime — the same "push variation behind an interface" pattern the API server applies to cluster state.</li>
+<li>The OCI Image Spec (what an image looks like) and OCI Runtime Spec (how to run one as an isolated process) are two different specifications with two different consumers, bridged by containerd.</li>
+<li>Layers are content-addressable and shared across images and nodes — a pull only transfers what isn't already cached.</li>
+<li>A snapshotter (overlayfs by default) assembles shared, read-only layers plus one thin writable layer per container, without copying shared data.</li>
 </ul>
+
+<p>Part II ends here, with a container actually running on a node. Part III turns outward, to the question every one of those containers immediately raises: how does anything else in the cluster — another pod, a Service, the outside world — actually reach it. That starts with the flat addressing model every CNI plugin has to satisfy.</p>
 
 <div class="donebar"></div>
 <nav class="chapfoot"></nav>
 </div>
 </main>
 </div>
-
-<script>
-(function(){
-  var NS='http://www.w3.org/2000/svg';
-
-  var L = [
-    { id:'app', y:16, name:'Application  \u00B7  L7', ex:'HTTP, gRPC, DNS queries',
-      ctl:'WAF \u00B7 authorization \u00B7 input validation \u00B7 rate limiting',
-      t:'Application layer',
-      sees:'The full request: method, path, headers, body, and the authenticated user. Everything semantic about what is being asked.',
-      prot:'Business logic, injection, access control, abuse. This is the only layer that knows what a request <em>means</em> \u2014 a packet filter cannot tell a legitimate transfer from a fraudulent one.',
-      blind:'Anything below it. A malformed packet, a SYN flood, or a connection that never reaches the process is invisible here. It also cannot help if the attacker bypasses the application entirely and connects to a backend directly (Ch. 1 TB-2).' },
-    { id:'tls', y:64, name:'Transport security  \u00B7  L5-6', ex:'TLS, mTLS, QUIC',
-      ctl:'certificate validation \u00B7 mTLS \u00B7 cipher policy',
-      t:'Transport security layer',
-      sees:'The peer\u2019s identity via its certificate, the negotiated parameters, and the plaintext at each endpoint \u2014 but only at the endpoints.',
-      prot:'Confidentiality and integrity in transit, and peer authentication (Parts III\u2013IV). With mTLS, both directions.',
-      blind:'What the application does with the bytes once decrypted. TLS delivered them intact; whether they should have been sent is a question for the layer above. Every vulnerability in Chapter 18 happens on a connection with a valid padlock.' },
-    { id:'tcp', y:112, name:'Transport  \u00B7  L4', ex:'TCP, UDP, ports',
-      ctl:'stateful firewall \u00B7 conntrack \u00B7 SYN cookies \u00B7 load balancing',
-      t:'Transport layer',
-      sees:'Ports, TCP flags, and connection state. A stateful firewall tracks flows so it can permit replies to outbound connections without a matching inbound rule.',
-      prot:'Reachability. Which services accept connections from where, plus resource exhaustion defences like SYN cookies.',
-      blind:'The payload. A stateful firewall permitting port 443 permits anything inside that connection \u2014 which is why "we allow only 443 outbound" stops very little once an attacker is inside. Note conntrack tables are finite: when full, new connections are dropped and it looks exactly like a network fault.' },
-    { id:'ip', y:160, name:'Network  \u00B7  L3', ex:'IP, routing, ICMP',
-      ctl:'packet filter \u00B7 network policy \u00B7 NAT \u00B7 IPsec, WireGuard \u00B7 RPKI',
-      t:'Network layer',
-      sees:'Source and destination addresses, protocol, and TTL. Nothing about identity or intent.',
-      prot:'Segmentation and blast radius. This is where egress filtering lives, and where a Kubernetes NetworkPolicy is enforced. Cheap, reliable, and independent of your application code \u2014 which is exactly what makes it good defence in depth.',
-      blind:'Who is actually sending. An IP is a location, not an identity: addresses are recycled, spoofed, shared behind NAT, and in a cluster reassigned within minutes. A rule saying "10.0.4.0/24 may reach the database" is true only while that range holds what you assume. That gap is the whole argument for workload identity (Ch. 16).' },
-    { id:'l2', y:208, name:'Link  \u00B7  L2', ex:'Ethernet, ARP, VLANs, Wi-Fi',
-      ctl:'802.1X \u00B7 port security \u00B7 dynamic ARP inspection \u00B7 WPA3',
-      t:'Link layer',
-      sees:'MAC addresses and the local segment. Anything plugged into the same switch or associated with the same access point.',
-      prot:'Who may join the network at all. 802.1X authenticates devices before they get an address; dynamic ARP inspection stops the ARP spoofing from Chapter 2.',
-      blind:'Everything beyond the local segment. Also note ARP has no authentication whatsoever by design \u2014 any host can claim to be the gateway \u2014 so the defences here are switch features, not host configuration. This is the layer where the evil-twin access point wins.' },
-    { id:'phy', y:256, name:'Physical', ex:'cables, radio, datacentre',
-      ctl:'physical access control \u00B7 tamper evidence \u00B7 fibre monitoring',
-      t:'Physical layer',
-      sees:'Everything on the medium, in raw form.',
-      prot:'Nothing, unless you control the premises. This is the layer where a fibre tap sits \u2014 passive, undetectable, and the reason Chapter 1 said passive attackers must be defeated by making their copy worthless rather than by detection.',
-      blind:'It is the bottom. Assume an adversary has it, and rely on encryption above.' }
-  ];
-
-  function draw(){
-    var g=document.getElementById('lyg'); g.innerHTML='';
-    L.forEach(function(l){
-      var r=document.createElementNS(NS,'rect');
-      r.setAttribute('class','lay'); r.setAttribute('id','ly-'+l.id);
-      r.setAttribute('x',20);r.setAttribute('y',l.y);r.setAttribute('width',660);r.setAttribute('height',40);
-      r.setAttribute('rx',3); r.setAttribute('data-l',l.id);
-      g.appendChild(r);
-      var t=document.createElementNS(NS,'text');
-      t.setAttribute('class','lt');t.setAttribute('x',34);t.setAttribute('y',l.y+18);t.textContent=l.name;
-      g.appendChild(t);
-      var e=document.createElementNS(NS,'text');
-      e.setAttribute('class','ls');e.setAttribute('x',34);e.setAttribute('y',l.y+32);e.textContent=l.ex;
-      g.appendChild(e);
-      var c=document.createElementNS(NS,'text');
-      c.setAttribute('class','lc');c.setAttribute('x',666);c.setAttribute('y',l.y+25);
-      c.setAttribute('text-anchor','end');c.textContent=l.ctl;
-      g.appendChild(c);
-    });
-  }
-  draw();
-
-  document.getElementById('lyg').addEventListener('click',function(e){
-    var el=e.target.closest('[data-l]'); if(!el) return;
-    document.querySelectorAll('.lay').forEach(function(x){x.classList.remove('sel');});
-    el.classList.add('sel');
-    var l=L.filter(function(x){return x.id===el.dataset.l;})[0];
-    document.getElementById('lystat').textContent=l.t;
-    document.getElementById('lyout').innerHTML =
-      '<strong>'+l.t+'</strong><br><br>'+
-      '<span style="color:#1B4FD8">Can see:</span> '+l.sees+'<br><br>'+
-      '<span style="color:#0B8A5B">Protects:</span> '+l.prot+'<br><br>'+
-      '<span style="color:#C1121F">Blind to:</span> '+l.blind;
-  });
-})();
-</script>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -942,7 +815,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:

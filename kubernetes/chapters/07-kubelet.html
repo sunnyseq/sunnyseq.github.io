@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>20 · Network security — The Wire</title>
+<title>7 · The kubelet — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -298,7 +298,7 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-the-wire" data-chapter="20">
+<body class="course-kubernetes" data-chapter="7">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
@@ -306,323 +306,202 @@ svg{max-width:100%;height:auto;display:block}
 <nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part V &nbsp;·&nbsp; Applied and operational &nbsp;·&nbsp; Chapter 20</p>
-  <h1>Network security</h1>
-  <p class="lede">Chapter 2 put an attacker at points on a path. This chapter is about the controls that go at those points — which layer each one attaches to, what it can and cannot see there, and why the industry spent thirty years defending a perimeter before concluding there wasn't one.</p>
+  <p class="eyebrow">Part II &nbsp;&middot;&nbsp; Scheduling and lifecycle &nbsp;&middot;&nbsp; Chapter 07</p>
+  <h1>The kubelet</h1>
+  <p class="lede">Every reconcile loop this course has described ends, eventually, at one node deciding to actually start a process. That decision belongs to the kubelet, the one component with no failover story of its own, and everything from probing to eviction to the control plane's own bootstrapping runs through its single per-node loop.</p>
 </header>
 
 <div class="col">
 
-<h2>20.1 Where security attaches</h2>
+<h2>7.1 The one component that is not optional</h2>
 
-<p>The layer a control lives at determines what it can see and what it can protect. Get this wrong and you deploy something that cannot possibly do what you wanted.</p>
+<p>Every control-plane component this course has covered so far — the API server, the scheduler, every controller — can restart, fail over, or briefly disappear without a running workload noticing. The kubelet cannot. It is the node agent: the process on every node responsible for making that node's slice of the cluster's desired state real, and if it stops, nothing on that node is managed by Kubernetes anymore, whether or not the containers themselves keep running.</p>
 
-<div class="demo">
-  <div class="demohead"><span>Interactive · the stack, and what each layer can see</span><span id="lystat">Click a layer</span></div>
-  <div class="demobody">
-    <svg viewBox="0 0 700 290" role="img" aria-label="Network stack with security controls per layer">
-      <defs><style>
-        .lay{fill:#fff;stroke:#DCDDD4;stroke-width:1.5;cursor:pointer}
-        .lay:hover{stroke:#1B4FD8;stroke-width:2.5}
-        .lay.sel{stroke:#1B4FD8;stroke-width:3;fill:#F4F7FF}
-        .lt{font:700 11.5px 'Space Grotesk',sans-serif;fill:#14161A;pointer-events:none}
-        .ls{font:400 9px 'JetBrains Mono',monospace;fill:#4A4F58;pointer-events:none}
-        .lc{font:400 9px 'JetBrains Mono',monospace;fill:#0F6E8C;pointer-events:none}
-      </style></defs>
-      <g id="lyg"></g>
-    </svg>
-    <div class="out" id="lyout" style="margin-top:14px">Click a layer to see what a control there can observe, what it can protect, and what is invisible to it.</div>
-  </div>
-  <div class="demonote">The recurring mistake is placing a control at a layer that cannot see what you asked it to inspect — a network firewall cannot read an encrypted payload, and an application check cannot stop a packet that never reaches it.</div>
-</div>
+<p>Structurally the kubelet is a reconciliation loop like any other controller from Chapter 4 — except its "desired state" input is not one GVK watched cluster-wide, it is <em>the set of pods bound to this specific node</em>, and its "act" step does not call the Kubernetes API to create an object, it calls the container runtime (Chapter 8) to actually start and stop processes. It is the hinge between the declarative world every earlier chapter described and real containers running on real hardware.</p>
 
-<h2>20.2 Firewalls, and what they actually decide</h2>
+<h2>7.2 Two ways a pod reaches the kubelet</h2>
 
-<table>
-<thead><tr><th>Type</th><th>Decides on</th><th>Blind to</th></tr></thead>
-<tbody>
-<tr><td>Packet filter</td><td>IP, port, protocol, flags</td><td>Everything about the conversation</td></tr>
-<tr><td>Stateful</td><td>The above plus connection state, so replies to outbound flows are allowed</td><td>Payload contents</td></tr>
-<tr><td>Application / L7</td><td>HTTP methods, paths, headers, bodies</td><td>Anything encrypted, unless it terminates TLS</td></tr>
-<tr><td>Identity-aware</td><td>The authenticated workload or user</td><td>Nothing relevant — but requires an identity system (Ch. 16)</td></tr>
-</tbody>
-</table>
-
-<p>Two things worth stating plainly. <strong>Egress filtering is usually more valuable than ingress filtering</strong>, and almost nobody does it. Ingress rules stop the initial intrusion, which is the part you were already thinking about. Egress rules stop the parts you were not: command-and-control callbacks, data exfiltration, and SSRF reaching your metadata endpoint (Ch. 18). Every serious breach involves data leaving.</p>
-
-<p>And <strong>a firewall rule is an assertion about topology, not identity.</strong> "10.0.4.0/24 may reach the database" is true only while that range contains what you think it contains — which in a cluster with recycled pod IPs may be true for minutes.</p>
-
-<h2>20.3 Where the rules actually run</h2>
-
-<p>On Linux, packet filtering happens in netfilter hooks inside the kernel. Understanding the hook order explains a great deal of otherwise baffling behaviour:</p>
-
-<pre><code>                                  ┌─────────────┐
-   PREROUTING ──► routing ──────► │   FORWARD   │ ──► POSTROUTING ──► out
-   (DNAT)         decision   │    └─────────────┘         (SNAT)
-                             │
-                             ▼
-                          INPUT ──► local process ──► OUTPUT
-                                                        │
-                                                        ▼
-                                                  routing again</code></pre>
-
-<p>Destination NAT happens in PREROUTING, <em>before</em> the routing decision — which is why a rule matching the original destination address in INPUT will never fire once DNAT has rewritten it. This is exactly the machinery a Kubernetes Service uses: kube-proxy writes DNAT rules translating a virtual ClusterIP into a real pod IP, and conntrack keeps the reverse mapping so replies find their way back.</p>
+<p>Almost every pod the kubelet manages arrived via the scheduler's binding write from Chapter 5 — the kubelet watches for pods with <code>spec.nodeName</code> set to its own node and reconciles those. But one category bypasses the API server for its <em>desired state</em> entirely: a <strong>static pod</strong>, defined by a manifest file sitting directly in a directory the kubelet watches on disk, with no scheduler, no API write, involved in creating it at all.</p>
 
 <div class="callout">
-  <span class="tag">Conntrack is a table with a size</span>
-  <p>Stateful filtering means the kernel keeps an entry per flow. That table is finite, and when it fills, new connections are dropped — with a log line most people have never read. Under a SYN flood, or simply at high connection churn, `nf_conntrack: table full, dropping packet` is a self-inflicted outage that looks exactly like a network fault. Size it deliberately on anything handling significant connection rates.</p>
+  <span class="tag">Why this exists</span>
+  <p>Static pods solve a bootstrapping problem: how do you run the API server itself as a pod, when running any pod normally requires an API server to already be up to schedule it onto a node? kubeadm-based clusters answer this by running the control plane's own components — <code>kube-apiserver</code>, <code>kube-scheduler</code>, <code>kube-controller-manager</code> — as static pods, started directly by the kubelet from local manifest files, before there is a working control plane to ask permission from.</p>
 </div>
 
-<h2>20.4 VPNs, and what they really give you</h2>
+<p>The kubelet still creates a <strong>mirror pod</strong> in the API server for every static pod it runs, purely so <code>kubectl get pods</code> shows it like anything else — but editing or deleting that mirror object does nothing to the real pod. The only source of truth for a static pod is the file on disk; the mirror is read-only from the API server's side of the relationship, which inverts the direction every other object in this course has followed so far.</p>
 
-<table>
-<thead><tr><th></th><th>IPsec</th><th>WireGuard</th><th>TLS-based (OpenVPN)</th></tr></thead>
-<tbody>
-<tr><td>Layer</td><td>3 — network</td><td>3 — network</td><td>4/7 — over TCP or UDP</td></tr>
-<tr><td>Complexity</td><td>High — IKE, SAs, transport vs tunnel mode</td><td><strong>Low</strong> — ~4,000 lines, one cipher suite</td><td>Moderate</td></tr>
-<tr><td>Crypto agility</td><td>Negotiable, which means downgradable</td><td>None by design; version the protocol instead</td><td>Negotiable</td></tr>
-<tr><td>Identity</td><td>Certificates or pre-shared keys</td><td>Public keys, pinned on both sides</td><td>Certificates</td></tr>
-</tbody>
-</table>
+<h2>7.3 PLEG: watching the runtime without drowning in polls</h2>
 
-<p>WireGuard is the interesting case for this course, because its design applies every lesson from Part IV. <strong>No negotiation at all</strong> — one key exchange, one cipher, one hash. Removing choice removes downgrade attacks, exactly as TLS 1.3 concluded (Ch. 13). It is silent to unauthenticated packets, so it does not respond to scans. And it is small enough to audit, which after Heartbleed (Ch. 17) is a security property in itself.</p>
+<p>The kubelet needs to know, promptly, when a container it manages starts, stops, or crashes — not just the ones it told the runtime to start, but any state change at all. Naively, this means listing every container's state on every node continuously, which scales badly as pod density per node grows. The <strong>Pod Lifecycle Event Generator (PLEG)</strong> is the kubelet's answer: instead of a full poll of every pod on every tick, it periodically relists containers, diffs the result against its own last-known snapshot, and emits an internal event only for what actually changed — a container exited, a container started — which is what actually triggers a reconcile pass for that specific pod, rather than the kubelet's main loop re-scanning everything on every tick regardless of whether anything moved.</p>
 
-<p>The honest caveat about VPNs generally: <strong>a VPN moves the trust boundary, it does not remove it.</strong> Your traffic is protected from the local network and fully visible to the VPN operator. For a corporate tunnel that is the intent. For a consumer product advertising privacy, you have swapped an ISP you have a contract with for a company you know nothing about.</p>
+<p>This should look familiar: it is the same shape as Chapter 4's shared informer plus work queue, just running one layer lower, against the container runtime's state instead of the API server's. A PLEG that falls behind — the classic symptom is <code>PLEG is not healthy</code> in kubelet logs, usually from an overloaded or slow container runtime — has the same effect a stalled informer has one layer up: the kubelet's view of container state goes stale, and everything downstream of it (status reporting, probe scheduling, restart decisions) lags with it.</p>
 
-<h2>20.5 DNS</h2>
+<h2>7.4 Node status and the heartbeat lease</h2>
 
-<p>DNS is unauthenticated and unencrypted by default, and those are two separate problems with two separate solutions that people constantly confuse.</p>
+<p>The kubelet reports two things about its node, on two different cadences, for a deliberate reason. Full <code>NodeStatus</code> — capacity, allocatable resources, conditions like <code>MemoryPressure</code> and <code>DiskPressure</code>, images cached locally — is comparatively large and is only pushed on a slower interval or when something in it actually changes. A separate, tiny <strong>Node Lease</strong> object (the same Lease primitive from Chapter 3) is renewed on a fast, fixed interval purely to say "I am still alive," with no payload beyond the renewal timestamp itself.</p>
 
-<ul>
-<li><strong>DNSSEC</strong> signs records, providing <em>authenticity</em>. It proves an answer came from the zone owner and was not forged. It does <strong>not</strong> encrypt anything — every query and answer remains fully visible.</li>
-<li><strong>DoH / DoT</strong> encrypt the query between you and your resolver, providing <em>confidentiality</em> on that hop. They say nothing about whether the resolver's answer is genuine, and the resolver still sees every name you look up.</li>
-</ul>
+<p>Splitting these apart is a direct scaling decision: heartbeating a lightweight Lease frequently is cheap even across thousands of nodes, while pushing the full, heavier NodeStatus at that same frequency would not be. The node controller watches the Lease for liveness and NodeStatus for everything else, and a node whose Lease stops renewing is what starts the countdown toward that node's pods being marked for eviction — well before a human would notice anything from the outside.</p>
 
-<p>They compose: DNSSEC for authenticity end to end, DoH or DoT for confidentiality on the first hop. Neither hides your queries from the resolver operator, which is the trade DoH makes — moving visibility from your ISP to whoever runs the resolver your browser chose.</p>
+<h2>7.5 Watch node pressure evict pods</h2>
 
-<p>Two DNS records this course has already leaned on: <strong>CAA</strong> restricting which CAs may issue for your domain (Ch. 10), and the <strong>HTTPS resource record</strong> carrying ECH keys (Ch. 14). Both make DNS part of your certificate security posture, which is worth remembering when deciding who can edit your zone.</p>
+<p>When a node runs low on a compressible-in-theory-but-not-in-practice resource — memory being the sharp case, since a process cannot be throttled the way CPU can — the kubelet detects pressure locally and starts evicting pods to relieve it, without waiting for the scheduler or any cluster-level component to intervene. Eviction order is not first-in-first-out; it is driven by each pod's <strong>Quality of Service class</strong>, derived automatically from its resource requests and limits (the full mechanics are Chapter 18's subject — this is the consequence).</p>
 
-<h2>20.6 Zero Trust</h2>
-
-<p>The perimeter model assumed a trusted inside and a hostile outside. Three things dissolved it: cloud services that live outside your network, remote work that puts users outside it, and lateral movement that makes "inside" meaningless once one host falls.</p>
-
-<p>Zero Trust replaces location-based trust with identity-based trust. The principles, stripped of vendor language:</p>
-
-<ul>
-<li><strong>No implicit trust from network position.</strong> Being on the corporate LAN or inside the VPC grants nothing.</li>
-<li><strong>Authenticate and authorise every request</strong>, not every session, and not at the perimeter (Ch. 19).</li>
-<li><strong>Identity is the workload or the user</strong>, cryptographically proven — which in practice means mTLS with workload certificates (Ch. 16).</li>
-<li><strong>Encrypt everything in transit</strong>, including internal traffic. Chapter 1's TB-2.</li>
-<li><strong>Least privilege, continuously evaluated</strong>, with device posture and context feeding the decision.</li>
-<li><strong>Assume breach.</strong> Design so that one compromised workload yields as little as possible.</li>
-</ul>
-
-<div class="callout warn">
-  <span class="tag">What Zero Trust is not</span>
-  <p>It is not a product, and buying a proxy does not deliver it. It is also not an argument for abandoning network controls — defence in depth still applies, and network policy remains one of the cheapest, most reliable layers you have precisely because it fails independently of your application code (Ch. 1, 18). The change is that the network is no longer permitted to be the <em>only</em> control, or the basis of an identity claim.</p>
+<div class="demo">
+  <div class="demohead"><span>Interactive · kubelet eviction under memory pressure</span><span id="evstat">healthy</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>Node memory pressure</label>
+      <button class="chip" id="evpress">apply pressure</button>
+      <button class="chip" id="evreset">Reset</button>
+    </div>
+    <table style="font-size:.85rem">
+      <thead><tr><th>Pod</th><th>QoS class</th><th>Why</th><th>Status</th></tr></thead>
+      <tbody id="evtable"></tbody>
+    </table>
+    <div class="out" id="evout" style="margin-top:14px">Every pod running normally.</div>
+  </div>
+  <div class="demonote">The kubelet does not evict the largest pod, or the newest one — it evicts in strict QoS order, BestEffort first, and only as many as needed to relieve the pressure it actually measured, re-checking after each one rather than evicting a fixed batch.</div>
 </div>
 
-<h2>20.7 Lab</h2>
+<script>
+(function(){
+  var PODS = [
+    {name:'cache-warmer', qos:'BestEffort', why:'no requests or limits set at all'},
+    {name:'batch-job',    qos:'Burstable',  why:'requests set, but below its limit'},
+    {name:'api-server',   qos:'Guaranteed', why:'requests exactly equal limits'}
+  ];
+  var order = {BestEffort:0, Burstable:1, Guaranteed:2};
+  var pressured = false;
+  var evicted = {};
+  var tbody = document.getElementById('evtable');
+  var out = document.getElementById('evout');
+  var stat = document.getElementById('evstat');
+
+  function render(){
+    tbody.innerHTML = PODS.map(function(p){
+      var isEvicted = evicted[p.name];
+      return '<tr><td><code>'+p.name+'</code></td><td>'+p.qos+'</td><td>'+p.why+'</td><td>'+
+        (isEvicted ? '<span style="color:#C1121F">Evicted</span>' : '<span style="color:#0B8A5B">Running</span>')+'</td></tr>';
+    }).join('');
+  }
+  render();
+
+  document.getElementById('evpress').addEventListener('click', function(){
+    pressured = true;
+    stat.textContent = 'MemoryPressure';
+    stat.style.color = '#C1121F';
+    var sorted = PODS.slice().sort(function(a,b){ return order[a.qos]-order[b.qos]; });
+    var log = [];
+    // evict lowest QoS first until "relieved" — simulate relief after evicting BestEffort only
+    evicted[sorted[0].name] = true;
+    log.push('kubelet: node under MemoryPressure — evicting lowest QoS class first');
+    log.push('evicted <strong>'+sorted[0].name+'</strong> (BestEffort — first to go, always)');
+    log.push('pressure relieved after one eviction — Burstable and Guaranteed pods were never at risk this time');
+    render();
+    out.innerHTML = log.join('<br>');
+  });
+  document.getElementById('evreset').addEventListener('click', function(){
+    pressured = false; evicted = {};
+    stat.textContent = 'healthy'; stat.style.color = '';
+    render();
+    out.textContent = 'Every pod running normally.';
+  });
+})();
+</script>
+
+<h2>7.6 Lab · read the kubelet's own account of a node</h2>
 
 <div class="lab">
-  <div class="labhead"><span>Shell · inspect the stack</span><button data-copy>Copy</button></div>
-<pre><code># What is listening, and on which interface? 0.0.0.0 means the world.
-ss -tlnp 2>/dev/null | awk 'NR==1 || /LISTEN/'
+  <div class="labhead"><span>Shell · node status, leases and eviction, from the outside</span><button data-copy>Copy</button></div>
+<pre><code># Full node status — capacity, allocatable, and every condition the
+# kubelet reports, not just Ready
+kubectl get node node-3 -o jsonpath='{.status.conditions}' | jq .
+kubectl describe node node-3 | grep -A6 Conditions
 
-# Netfilter rules as the kernel sees them, by hook
-sudo nft list ruleset 2>/dev/null | head -40 \
-  || sudo iptables -L -n -v --line-numbers
+# The lightweight heartbeat, separate from the above
+kubectl get lease node-3 -n kube-node-lease -o jsonpath='{.spec.renewTime}'
 
-# NAT rules \u2014 in a Kubernetes node this is mostly kube-proxy's work (Ch. 22)
-sudo iptables -t nat -L PREROUTING -n | head -20
+# Static pods: find them by their name suffix (node name, hyphenated in)
+# and confirm the mirror is read-only — deleting it does nothing lasting
+kubectl get pods -n kube-system -o wide | grep $(hostname)
+kubectl delete pod kube-apiserver-node-1 -n kube-system
+kubectl get pods -n kube-system -o wide | grep kube-apiserver
+# it reappears immediately — the kubelet recreated it from the same file
 
-# Conntrack: current usage against the limit. A full table drops new connections.
-cat /proc/sys/net/netfilter/nf_conntrack_count /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null
-sudo conntrack -L 2>/dev/null | head -5
+# Watch PLEG health directly in kubelet logs (node access required)
+journalctl -u kubelet -f | grep -i pleg
 
-# Trace the path and see where control changes hands
-mtr -rwc 10 example.com 2>/dev/null || traceroute example.com
+# Confirm a pod's QoS class before reasoning about eviction order
+kubectl get pod cache-warmer -o jsonpath='{.status.qosClass}'
 
-# DNS: is the answer authenticated? Look for the 'ad' flag.
-dig +dnssec +multi example.com A | grep -E 'flags:|RRSIG'
-dig +dnssec cloudflare.com A | grep -c RRSIG
-#   'ad' in the flags = your resolver validated DNSSEC. No RRSIG = zone unsigned.
-
-# Is your query encrypted on the first hop? Compare plain DNS with DoH.
-sudo tcpdump -i any -n 'port 53' -c 5 &amp; sleep 1; dig +short example.com; sleep 1; kill %1
-curl -s -H 'accept: application/dns-json' \
-  'https://cloudflare-dns.com/dns-query?name=example.com&type=A' | python3 -m json.tool
-#   The first is readable on the wire. The second is inside TLS.
-
-# What does your resolver actually do?
-resolvectl status 2>/dev/null | grep -E 'DNS Servers|DNSSEC|DNSOverTLS' || cat /etc/resolv.conf
-
-# WireGuard: the entire configuration surface, which is the point
-wg genkey | tee priv.key | wg pubkey > pub.key
-cat <<'CONF'
-[Interface]
-PrivateKey = <priv>
-Address    = 10.10.0.2/32
-[Peer]
-PublicKey  = <peer pub>          # pinned. no negotiation, no CA, no cipher list.
-AllowedIPs = 10.10.0.0/24
-Endpoint   = vpn.example:51820
-PersistentKeepalive = 25
-CONF
-
-# Egress: can this host reach things it should not?
-for t in 169.254.169.254 10.0.0.1 8.8.8.8; do
-  printf '%-18s ' "$t"
-  timeout 2 bash -c "echo > /dev/tcp/$t/80" 2>/dev/null &amp;&amp; echo REACHABLE || echo blocked
-done
-#   169.254.169.254 reachable from an app that fetches user URLs is the
-#   Capital One breach waiting to happen (Ch. 18).</code></pre>
+# Eviction events, in the order they actually happened
+kubectl get events --field-selector reason=Evicted -A -w</code></pre>
 </div>
 
 <div class="quiz">
   <h3>Knowledge check</h3>
 
-  <div class="q" data-answer="1">
-    <p class="qtext">What does DNSSEC provide that DoH does not?</p>
+  <div class="q" data-answer="2">
+    <p class="qtext">You run <code>kubectl delete pod kube-scheduler-node-1 -n kube-system</code> on a kubeadm cluster and the pod reappears seconds later, unchanged. Why?</p>
     <div class="opts">
-      <button class="opt">Confidentiality of queries from your ISP</button>
-      <button class="opt">Authenticity — proof that the answer genuinely came from the zone owner</button>
-      <button class="opt">Faster resolution</button>
-      <button class="opt">Protection from the resolver operator</button>
+      <button class="opt">A Deployment controller recreated it</button>
+      <button class="opt">The API server rejected the delete and silently ignored it</button>
+      <button class="opt">It is a static pod — the mirror object in the API server is a read-only reflection; the real source of truth is a manifest file on disk, and the kubelet simply restarts it from that file</button>
+      <button class="opt">kube-scheduler pods are protected by a special finalizer</button>
     </div>
-    <p class="why">Two different properties. DNSSEC signs records so a forged answer is detectable, and encrypts nothing. DoH encrypts the query to your resolver and says nothing about whether the answer is genuine. They compose, and neither hides your queries from the resolver itself.</p>
+    <p class="why">Static pods invert the usual direction of control: the API object is a mirror the kubelet creates for visibility, not the thing driving reality. Deleting the mirror doesn't touch the actual desired state, which lives in a file on the node — so the kubelet just runs its normal reconcile and recreates the mirror against the still-running (or freshly restarted) container.</p>
   </div>
 
-  <div class="q" data-answer="3">
-    <p class="qtext">Why is egress filtering often more valuable than ingress filtering?</p>
+  <div class="q" data-answer="1">
+    <p class="qtext">What problem does PLEG solve that a naive "list every container's status every tick" approach does not?</p>
     <div class="opts">
-      <button class="opt">It is easier to configure</button>
-      <button class="opt">Inbound traffic is already encrypted</button>
-      <button class="opt">It reduces bandwidth costs</button>
-      <button class="opt">It constrains what an attacker can do after a compromise — command-and-control, exfiltration, and SSRF reaching internal endpoints</button>
+      <button class="opt">It encrypts container status data in transit to the API server</button>
+      <button class="opt">It diffs current container state against the last known snapshot and emits events only for what changed, avoiding continuous full re-scans as pod density grows</button>
+      <button class="opt">It replaces the container runtime's own state tracking entirely</button>
+      <button class="opt">It eliminates the need for liveness and readiness probes</button>
     </div>
-    <p class="why">Ingress rules address the intrusion you were already thinking about. Egress rules address everything after it, and every serious breach involves data leaving. Blocking an application from reaching the metadata endpoint turns an SSRF bug into a non-event without requiring the code to be correct.</p>
+    <p class="why">PLEG is the kubelet's version of Chapter 4's informer-plus-queue pattern, applied to the container runtime instead of the API server: relist, diff against the prior snapshot, emit events only for actual changes. This is what keeps the kubelet's reconcile work proportional to what's actually changing rather than to total pod count on every single tick.</p>
   </div>
 
   <div class="q" data-answer="0">
-    <p class="qtext">Why does WireGuard deliberately offer no cryptographic negotiation?</p>
+    <p class="qtext">Node status (capacity, conditions, images) and the Node Lease are reported on different cadences. Why split them?</p>
     <div class="opts">
-      <button class="opt">Removing choice removes downgrade attacks — the same conclusion TLS 1.3 reached</button>
-      <button class="opt">Negotiation is too slow for a VPN</button>
-      <button class="opt">Its ciphers are too new to have alternatives</button>
-      <button class="opt">To reduce packet size</button>
+      <button class="opt">The full NodeStatus payload is comparatively large; heartbeating something that size at high frequency does not scale across a large cluster the way a tiny Lease renewal does</button>
+      <button class="opt">NodeStatus requires cryptographic signing and Lease renewal does not</button>
+      <button class="opt">They are actually reported on the same cadence, and this is a common misconception</button>
+      <button class="opt">Lease objects cannot be updated more than once per minute by design</button>
     </div>
-    <p class="why">Every legacy option retained for compatibility is something an attacker can steer you toward (Ch. 2, 13). WireGuard fixes one key exchange, one cipher and one hash, and versions the whole protocol if they need to change. The small codebase is a second security property — after Heartbleed, auditability counts.</p>
+    <p class="why">This is a straightforward cost-of-frequency tradeoff. A bare timestamp can be renewed often and cheaply at any cluster size; a full status payload with conditions and capacity cannot be pushed at that same frequency without real overhead, so only the minimum needed for liveness detection runs fast, and everything else runs on a slower, event-driven cadence.</p>
   </div>
 
-  <div class="q" data-answer="2">
-    <p class="qtext">A firewall rule allows <code>10.0.4.0/24</code> to reach the database. What is the fundamental weakness?</p>
+  <div class="q" data-answer="3">
+    <p class="qtext">A node hits MemoryPressure with one BestEffort, one Burstable, and one Guaranteed pod running. Which does the kubelet evict first?</p>
     <div class="opts">
-      <button class="opt">CIDR notation is ambiguous</button>
-      <button class="opt">The rule cannot inspect encrypted traffic</button>
-      <button class="opt">It asserts something about topology, not identity — the range's contents change, and any compromised workload in it inherits the access</button>
-      <button class="opt">IPv6 traffic bypasses it</button>
+      <button class="opt">Whichever pod is consuming the most memory in absolute terms, regardless of QoS class</button>
+      <button class="opt">The Guaranteed pod, since it has the tightest resource bounds and is easiest to restart predictably</button>
+      <button class="opt">All three simultaneously, to relieve pressure as fast as possible</button>
+      <button class="opt">The BestEffort pod — eviction order follows QoS class strictly, and BestEffort (no requests or limits at all) is always first</button>
     </div>
-    <p class="why">The rule is only as meaningful as the stability of what lives in that range, and in a cluster with recycled pod IPs that may be minutes. It also grants access to <em>anything</em> that lands there, compromised or not. Zero Trust's answer is to authenticate the workload cryptographically (Ch. 16) and keep the network rule as an independent second layer.</p>
+    <p class="why">QoS class is exactly the signal eviction order is built on: BestEffort pods made no resource promises at all and are evicted first, Burstable pods next, and Guaranteed pods are evicted only as an absolute last resort. The kubelet also re-measures pressure after each eviction rather than evicting a fixed batch upfront.</p>
   </div>
 </div>
 
-<h2>20.8 Carry forward</h2>
+<h2>7.7 What to carry into Chapter 8</h2>
 <ul>
-<li>A control can only act on what its layer can see. Match the control to the layer.</li>
-<li>Egress filtering constrains the attacker after a compromise, and is widely neglected.</li>
-<li>DNAT happens before routing; conntrack tables are finite and fill.</li>
-<li>A VPN relocates trust rather than removing it.</li>
-<li>DNSSEC is authenticity, DoH is confidentiality. Different problems.</li>
-<li>Zero Trust replaces location-based trust with proven identity — and keeps the network layer as defence in depth, not as the identity claim.</li>
+<li>The kubelet is a per-node reconciliation loop whose desired state is "pods bound to this node" and whose action step calls the container runtime directly.</li>
+<li>Static pods are the one exception to API-server-as-source-of-truth: their manifest lives on disk, and the API object is a read-only mirror.</li>
+<li>PLEG applies the informer/queue pattern one layer down — diffing runtime state instead of polling it wholesale on every tick.</li>
+<li>Node status and Node Lease are split by cost: a small, frequent heartbeat for liveness, a larger, less frequent payload for everything else.</li>
+<li>Eviction under pressure is QoS-ordered and incremental, not proportional to pod size or arbitrary — BestEffort first, Guaranteed last, re-measured after each step.</li>
 </ul>
+
+<p>Every time this chapter said "the kubelet calls the runtime to start a container," it skipped over what that call actually does — the interface it speaks, and the layers of software between "start this container" and a process actually running in its own isolated namespace. That gap is Chapter 8.</p>
 
 <div class="donebar"></div>
 <nav class="chapfoot"></nav>
 </div>
 </main>
 </div>
-
-<script>
-(function(){
-  var NS='http://www.w3.org/2000/svg';
-
-  var L = [
-    { id:'app', y:16, name:'Application  \u00B7  L7', ex:'HTTP, gRPC, DNS queries',
-      ctl:'WAF \u00B7 authorization \u00B7 input validation \u00B7 rate limiting',
-      t:'Application layer',
-      sees:'The full request: method, path, headers, body, and the authenticated user. Everything semantic about what is being asked.',
-      prot:'Business logic, injection, access control, abuse. This is the only layer that knows what a request <em>means</em> \u2014 a packet filter cannot tell a legitimate transfer from a fraudulent one.',
-      blind:'Anything below it. A malformed packet, a SYN flood, or a connection that never reaches the process is invisible here. It also cannot help if the attacker bypasses the application entirely and connects to a backend directly (Ch. 1 TB-2).' },
-    { id:'tls', y:64, name:'Transport security  \u00B7  L5-6', ex:'TLS, mTLS, QUIC',
-      ctl:'certificate validation \u00B7 mTLS \u00B7 cipher policy',
-      t:'Transport security layer',
-      sees:'The peer\u2019s identity via its certificate, the negotiated parameters, and the plaintext at each endpoint \u2014 but only at the endpoints.',
-      prot:'Confidentiality and integrity in transit, and peer authentication (Parts III\u2013IV). With mTLS, both directions.',
-      blind:'What the application does with the bytes once decrypted. TLS delivered them intact; whether they should have been sent is a question for the layer above. Every vulnerability in Chapter 18 happens on a connection with a valid padlock.' },
-    { id:'tcp', y:112, name:'Transport  \u00B7  L4', ex:'TCP, UDP, ports',
-      ctl:'stateful firewall \u00B7 conntrack \u00B7 SYN cookies \u00B7 load balancing',
-      t:'Transport layer',
-      sees:'Ports, TCP flags, and connection state. A stateful firewall tracks flows so it can permit replies to outbound connections without a matching inbound rule.',
-      prot:'Reachability. Which services accept connections from where, plus resource exhaustion defences like SYN cookies.',
-      blind:'The payload. A stateful firewall permitting port 443 permits anything inside that connection \u2014 which is why "we allow only 443 outbound" stops very little once an attacker is inside. Note conntrack tables are finite: when full, new connections are dropped and it looks exactly like a network fault.' },
-    { id:'ip', y:160, name:'Network  \u00B7  L3', ex:'IP, routing, ICMP',
-      ctl:'packet filter \u00B7 network policy \u00B7 NAT \u00B7 IPsec, WireGuard \u00B7 RPKI',
-      t:'Network layer',
-      sees:'Source and destination addresses, protocol, and TTL. Nothing about identity or intent.',
-      prot:'Segmentation and blast radius. This is where egress filtering lives, and where a Kubernetes NetworkPolicy is enforced. Cheap, reliable, and independent of your application code \u2014 which is exactly what makes it good defence in depth.',
-      blind:'Who is actually sending. An IP is a location, not an identity: addresses are recycled, spoofed, shared behind NAT, and in a cluster reassigned within minutes. A rule saying "10.0.4.0/24 may reach the database" is true only while that range holds what you assume. That gap is the whole argument for workload identity (Ch. 16).' },
-    { id:'l2', y:208, name:'Link  \u00B7  L2', ex:'Ethernet, ARP, VLANs, Wi-Fi',
-      ctl:'802.1X \u00B7 port security \u00B7 dynamic ARP inspection \u00B7 WPA3',
-      t:'Link layer',
-      sees:'MAC addresses and the local segment. Anything plugged into the same switch or associated with the same access point.',
-      prot:'Who may join the network at all. 802.1X authenticates devices before they get an address; dynamic ARP inspection stops the ARP spoofing from Chapter 2.',
-      blind:'Everything beyond the local segment. Also note ARP has no authentication whatsoever by design \u2014 any host can claim to be the gateway \u2014 so the defences here are switch features, not host configuration. This is the layer where the evil-twin access point wins.' },
-    { id:'phy', y:256, name:'Physical', ex:'cables, radio, datacentre',
-      ctl:'physical access control \u00B7 tamper evidence \u00B7 fibre monitoring',
-      t:'Physical layer',
-      sees:'Everything on the medium, in raw form.',
-      prot:'Nothing, unless you control the premises. This is the layer where a fibre tap sits \u2014 passive, undetectable, and the reason Chapter 1 said passive attackers must be defeated by making their copy worthless rather than by detection.',
-      blind:'It is the bottom. Assume an adversary has it, and rely on encryption above.' }
-  ];
-
-  function draw(){
-    var g=document.getElementById('lyg'); g.innerHTML='';
-    L.forEach(function(l){
-      var r=document.createElementNS(NS,'rect');
-      r.setAttribute('class','lay'); r.setAttribute('id','ly-'+l.id);
-      r.setAttribute('x',20);r.setAttribute('y',l.y);r.setAttribute('width',660);r.setAttribute('height',40);
-      r.setAttribute('rx',3); r.setAttribute('data-l',l.id);
-      g.appendChild(r);
-      var t=document.createElementNS(NS,'text');
-      t.setAttribute('class','lt');t.setAttribute('x',34);t.setAttribute('y',l.y+18);t.textContent=l.name;
-      g.appendChild(t);
-      var e=document.createElementNS(NS,'text');
-      e.setAttribute('class','ls');e.setAttribute('x',34);e.setAttribute('y',l.y+32);e.textContent=l.ex;
-      g.appendChild(e);
-      var c=document.createElementNS(NS,'text');
-      c.setAttribute('class','lc');c.setAttribute('x',666);c.setAttribute('y',l.y+25);
-      c.setAttribute('text-anchor','end');c.textContent=l.ctl;
-      g.appendChild(c);
-    });
-  }
-  draw();
-
-  document.getElementById('lyg').addEventListener('click',function(e){
-    var el=e.target.closest('[data-l]'); if(!el) return;
-    document.querySelectorAll('.lay').forEach(function(x){x.classList.remove('sel');});
-    el.classList.add('sel');
-    var l=L.filter(function(x){return x.id===el.dataset.l;})[0];
-    document.getElementById('lystat').textContent=l.t;
-    document.getElementById('lyout').innerHTML =
-      '<strong>'+l.t+'</strong><br><br>'+
-      '<span style="color:#1B4FD8">Can see:</span> '+l.sees+'<br><br>'+
-      '<span style="color:#0B8A5B">Protects:</span> '+l.prot+'<br><br>'+
-      '<span style="color:#C1121F">Blind to:</span> '+l.blind;
-  });
-})();
-</script>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -942,7 +821,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
