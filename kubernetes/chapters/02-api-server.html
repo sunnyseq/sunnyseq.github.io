@@ -25,9 +25,11 @@
   --measure:78ch;
 }
 
-.course-the-wire  { --client:#1B4FD8; --server:#D6006E; }
-.course-kubernetes{ --client:#0F6E8C; --server:#E2622A; }
-.course-linux     { --client:#5C3D99; --server:#C48A16; }
+.course-the-wire     { --client:#1B4FD8; --server:#D6006E; }
+.course-kubernetes   { --client:#0F6E8C; --server:#E2622A; }
+.course-linux        { --client:#5C3D99; --server:#C48A16; }
+.course-microservices{ --client:#1E7A46; --server:#B5308C; }
+.course-containers   { --client:#8A5A2E; --server:#2A7FA0; }
 
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
@@ -872,6 +874,116 @@ window.LIBRARY = {
       appendix: [
         { file:"appendix-commands.html", title:"Command reference", desc:"The diagnostic commands worth memorising, grouped by subsystem.", soon:true }
       ]
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "microservices",
+      slug: "microservices",
+      title: "Loosely Coupled",
+      subtitle: "Microservices · Architecture · Distributed systems",
+      hero: "One system, cut into pieces that fail alone instead of together",
+      blurb: "Service boundaries, APIs, and the distributed-systems failure modes a monolith never had to think about — taught through the resilience and coordination patterns that keep many small things behaving like one reliable one.",
+      parts: [
+        { id:"I",   name:"Why split at all",            range:[1,3] },
+        { id:"II",  name:"Staying up when parts fail",  range:[4,7] },
+        { id:"III", name:"Finding and watching each other", range:[8,10] },
+        { id:"IV",  name:"Events and releases",         range:[11,12] }
+      ],
+      chapters: [
+        { n:1, file:"01-monolith-to-services.html", title:"From monolith to services", soon:true,
+          desc:"The reasons to split that actually hold up — independent deployability, failure isolation, team boundaries — and the ones that don't.",
+          keys:"monolith microservices decomposition independent deployability conway's law distributed monolith modular monolith" },
+        { n:2, file:"02-service-boundaries.html", title:"Service boundaries and the domain", soon:true,
+          desc:"Bounded contexts, data ownership per service, and how to avoid rebuilding a monolith with network calls between its functions.",
+          keys:"bounded context domain driven design service boundary data ownership distributed monolith coupling cohesion" },
+        { n:3, file:"03-talking-between-services.html", title:"Talking between services", soon:true,
+          desc:"Synchronous versus asynchronous calls, REST/gRPC/messaging trade-offs, and the fallacies of distributed computing.",
+          keys:"rest grpc messaging synchronous asynchronous fallacies of distributed computing network latency partial failure" },
+        { n:4, file:"04-timeouts-retries-idempotency.html", title:"Timeouts, retries and idempotency", soon:true,
+          desc:"Why a naive retry turns a slow dependency into an outage, and what makes an operation safe to retry at all.",
+          keys:"timeout retry idempotency idempotent exponential backoff jitter retry storm at least once at most once" },
+        { n:5, file:"05-circuit-breakers-bulkheads.html", title:"Circuit breakers and bulkheads", soon:true,
+          desc:"Containing failure instead of retry-storming into it — half-open states, and isolating one dependency's failure from the rest.",
+          keys:"circuit breaker bulkhead half open failure isolation resilience hystrix cascading failure" },
+        { n:6, file:"06-backpressure-load-shedding.html", title:"Backpressure and load shedding", soon:true,
+          desc:"Protecting a service from its own callers — queueing limits, load shedding, and graceful degradation under overload.",
+          keys:"backpressure load shedding queueing rate limiting graceful degradation overload admission control" },
+        { n:7, file:"07-sagas-distributed-transactions.html", title:"Sagas and distributed transactions", soon:true,
+          desc:"Why two-phase commit doesn't survive at this scale, and how compensating transactions hold a multi-service operation together.",
+          keys:"saga distributed transaction two phase commit compensating transaction eventual consistency orchestration choreography" },
+        { n:8, file:"08-service-discovery.html", title:"Service discovery and load balancing", soon:true,
+          desc:"Client-side versus server-side discovery, DNS-based approaches, and what a service mesh actually adds on top.",
+          keys:"service discovery load balancing client side server side dns service mesh sidecar proxy",
+          xref:[{course:"kubernetes", n:10, why:"Services and kube-proxy as one concrete implementation of this"}] },
+        { n:9, file:"09-observability-across-boundaries.html", title:"Observability across a boundary", soon:true,
+          desc:"Distributed tracing, correlation IDs, and answering ‘which service is actually slow’ across a call graph nobody can see all at once.",
+          keys:"distributed tracing correlation id span trace context propagation opentelemetry observability latency" },
+        { n:10, file:"10-api-contracts-versioning.html", title:"API contracts and versioning", soon:true,
+          desc:"Backward compatibility, consumer-driven contracts, and shipping a breaking change across services that deploy independently.",
+          keys:"api contract versioning backward compatibility consumer driven contract breaking change schema evolution" },
+        { n:11, file:"11-event-driven-architecture.html", title:"Event-driven architecture", soon:true,
+          desc:"Pub/sub, event sourcing, CQRS, and the eventual-consistency trade-offs every one of them makes on your behalf.",
+          keys:"event driven architecture pub sub event sourcing cqrs eventual consistency message broker kafka" },
+        { n:12, file:"12-deployment-patterns.html", title:"Deployment patterns for many small things", soon:true,
+          desc:"Blue/green, canary releases, feature flags, and independent release trains — deploying one service without coordinating all of them.",
+          keys:"blue green canary feature flag release train independent deployment progressive delivery",
+          xref:[{course:"kubernetes", n:16, why:"the rollout mechanics a canary or blue/green deploy is built on"}] }
+      ],
+      appendix: []
+    },
+
+    /* ---------------------------------------------------------- */
+    {
+      id: "containers",
+      slug: "containers",
+      title: "Shipping Container",
+      subtitle: "Containers · Images · Supply chain",
+      hero: "What actually ships, and everything that has to be true about it before it does",
+      blurb: "Everything between a Dockerfile and an image you'd trust in production — building, layering, scanning, signing and distributing a container image, independent of any particular orchestrator running it.",
+      parts: [
+        { id:"I",   name:"What an image actually is", range:[1,3] },
+        { id:"II",  name:"Trusting what you run",     range:[4,6] },
+        { id:"III", name:"Registries and distribution", range:[7,8] },
+        { id:"IV",  name:"Running containers directly", range:[9,10] }
+      ],
+      chapters: [
+        { n:1, file:"01-not-a-vm.html", title:"A container is not a VM", soon:true,
+          desc:"Process isolation versus hardware virtualisation, and exactly what a container does and doesn't share with its host.",
+          keys:"container virtual machine process isolation hypervisor shared kernel namespace lightweight",
+          xref:[{course:"linux", n:9, why:"the namespace primitives a container is actually built from"}] },
+        { n:2, file:"02-anatomy-of-an-image.html", title:"Anatomy of an image", soon:true,
+          desc:"Layers, the manifest, the config blob, and reading a Dockerfile against the OCI Image Spec it actually produces.",
+          keys:"image layers manifest config blob dockerfile oci image spec digest",
+          xref:[{course:"kubernetes", n:8, why:"how the runtime pulls and unpacks exactly this format"}] },
+        { n:3, file:"03-building-images-well.html", title:"Building images well", soon:true,
+          desc:"Multi-stage builds, layer-caching order, and minimising image size with distroless and scratch base images.",
+          keys:"multi stage build layer caching distroless scratch base image minimal image size dockerfile best practices" },
+        { n:4, file:"04-image-provenance.html", title:"Image provenance and supply chain", soon:true,
+          desc:"SBOMs, signing with Sigstore/cosign, and verifying that what you pull is what someone actually built.",
+          keys:"sbom software bill of materials signing sigstore cosign provenance supply chain attestation slsa" },
+        { n:5, file:"05-vulnerability-scanning.html", title:"Vulnerability scanning", soon:true,
+          desc:"CVE scanning in CI, base-image hygiene, and keeping a patching cadence that doesn't just get ignored.",
+          keys:"vulnerability scanning cve trivy grype base image patching cadence ci pipeline security gate" },
+        { n:6, file:"06-container-security-fundamentals.html", title:"Container security fundamentals", soon:true,
+          desc:"Running as non-root, read-only filesystems, dropped capabilities and seccomp profiles — the practitioner's checklist.",
+          keys:"non root read only filesystem capabilities drop seccomp profile least privilege container hardening",
+          xref:[{course:"linux", n:11, why:"the kernel mechanisms — capabilities, seccomp, LSMs — underneath every item on this checklist"}] },
+        { n:7, file:"07-registries.html", title:"Registries", soon:true,
+          desc:"Pushing, pulling, tags versus digests, why ‘latest’ is a trap, and running or authenticating to a private registry.",
+          keys:"registry push pull tag digest latest tag trap private registry authentication oci distribution spec" },
+        { n:8, file:"08-multi-arch-images.html", title:"Multi-architecture images", soon:true,
+          desc:"Manifest lists, building for arm64 and amd64 from one source, and why this matters for a real, mixed fleet.",
+          keys:"multi architecture manifest list arm64 amd64 buildx cross platform image" },
+        { n:9, file:"09-networking-storage-standalone.html", title:"Container networking and storage, standalone", soon:true,
+          desc:"Bridge networks, volumes, and what docker compose is actually doing underneath, with no orchestrator involved.",
+          keys:"bridge network volume docker compose standalone container networking bind mount" },
+        { n:10, file:"10-laptop-to-cluster.html", title:"From a laptop to a cluster", soon:true,
+          desc:"What changes and what doesn't when the same image starts running under an orchestrator instead of a single Docker host.",
+          keys:"docker compose to kubernetes orchestrator transition image portability local development production parity",
+          xref:[{course:"kubernetes", n:8, why:"the runtime layer that takes over from here"}] }
+      ],
+      appendix: []
     }
   ]
 };

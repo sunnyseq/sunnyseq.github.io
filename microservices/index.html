@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>1 · Declarative reconciliation — Inside Out</title>
+<title>Loosely Coupled — Microservices architecture</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -300,344 +300,36 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-kubernetes" data-chapter="1">
+<body class="course-microservices">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
-<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part I &nbsp;&middot;&nbsp; The model &nbsp;&middot;&nbsp; Chapter 01</p>
-  <h1>Declarative reconciliation</h1>
-  <p class="lede">Kubernetes does not run your commands. It holds a fact you asked to be true, and spends the rest of that object's life refusing to let reality drift away from it. Every controller in the system, from the built-ins to the operator you install next quarter, is this one idea running against a different pair of states.</p>
+  <p class="eyebrow" id="eyebrow"></p>
+  <h1 id="hero"></h1>
+  <p class="lede" id="blurb"></p>
 </header>
 
 <div class="col">
-
-<h2>1.1 Imperative versus declarative</h2>
-
-<p>An imperative system is one you drive with commands: <em>start this container, attach this disk, open this port.</em> Each command is an instruction, and the system's job is to execute it faithfully. If you want three replicas of a process running, you run the start command three times. If one crashes, nothing happens until you notice and run the command again. The system has no opinion about what "correct" looks like — it only knows how to obey.</p>
-
-<p>Kubernetes is not that. You do not tell it to start a container. You tell it a fact you want to be true — <em>there should be three replicas of this pod running</em> — and you never issue that instruction again. The fact is written down as an object, and something else spends the rest of that object's life making reality match it, however many times reality drifts away.</p>
-
-<p>This is the single idea the rest of this course is built on top of. Not YAML, not <code>kubectl</code>, not containers — the fact that Kubernetes is a machine for continuously computing the difference between two states and acting to close it. Everything else, the API server, etcd, the scheduler, every controller, every operator you will ever install, is an instance of the same loop running against a different pair of states.</p>
-
-<div class="callout">
-  <span class="tag">Terminology, precisely</span>
-  <p><strong>Desired state</strong> is what you asked for, written into an object's <code>spec</code>. <strong>Observed state</strong> is what a controller most recently found to be true in the world, written into that object's <code>status</code>. <strong>Reconciliation</strong> is the act of comparing the two and taking action to move observed state toward desired state. No component in Kubernetes ever tries to make desired state match observed state — the arrow only ever points one way.</p>
+  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
 </div>
 
-<h2>1.2 spec and status are not decoration</h2>
+<div id="toc"></div>
 
-<p>Every Kubernetes object that participates in this pattern is shaped the same way: a chunk you write, and a chunk the system writes back.</p>
+<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
+  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
+</p>
 
-<pre><code>apiVersion: apps/v1
-kind: ReplicaSet
-metadata:
-  name: web
-spec:            # ← yours. You write this, Kubernetes only reads it.
-  replicas: 3
-  selector: {matchLabels: {app: web}}
-  template: {...}
-status:          # ← the controller's. You can read this, you should not write it.
-  replicas: 2
-  readyReplicas: 2
-  observedGeneration: 4</code></pre>
+<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
+  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
+  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
+</p>
 
-<p><code>spec</code> is your side of the contract. You, or something acting on your behalf — a CI pipeline, a GitOps operator, another controller one layer up — write to it, and then you stop. <code>status</code> is the controller's side. It is not a cache and it is not documentation; it is the controller's honest, continuously updated report of what it has actually managed to make true. When <code>spec.replicas</code> is 3 and <code>status.replicas</code> is 2, that gap <em>is</em> the controller's entire job description at this instant. Nothing else about the object matters as much as that one difference.</p>
-
-<p>This split is why <code>kubectl apply</code> feels so different from a shell script. You are not asking anything to happen. You are editing a fact, and walking away.</p>
-
-<h2>1.3 The shape of a control loop</h2>
-
-<p>Strip away everything Kubernetes-specific and a controller is three steps, run forever:</p>
-
-<pre><code>for {
-    observed := Observe()              // what is actually true right now
-    desired  := ReadSpec()             // what should be true
-    diff     := Compare(observed, desired)
-    if diff != nothing {
-        Act(diff)                      // push the world toward desired
-    }
-    Sleep(or: WaitForNextEvent())
-}</code></pre>
-
-<p>The loop never terminates and it never assumes success. Every iteration re-derives the diff from scratch rather than trusting that the last action worked. This sounds wasteful until you notice what it buys you: a controller that crashes mid-action and restarts does not need a recovery procedure. It just runs the loop again. The world is either already fixed, in which case the diff is empty and nothing happens, or it is not, in which case the loop tries again exactly as it would have anyway. <strong>The failure-recovery mechanism and the normal-operation mechanism are the same code path.</strong> That collapse of two hard problems into one is most of why this design has held up as well as it has.</p>
-
-<h2>1.4 Watch it converge</h2>
-
-<p>Below is a minimal reconciler modelled on how a ReplicaSet controller behaves: it watches a <code>spec.replicas</code> value and a set of live pods, and on every tick it closes whatever gap exists between them. Change the desired count, or reach in and kill a pod yourself, and watch the loop notice and correct it on its own — without you ever telling it <em>how</em> to fix anything, only what should be true.</p>
-
-<div class="demo">
-  <div class="demohead"><span>Interactive · reconciliation loop</span><span id="rlstatus">converged</span></div>
-  <div class="demobody">
-    <div class="ctl">
-      <label>Desired replicas</label>
-      <button class="chip" data-des="-1">−</button>
-      <span id="rldes" style="font-family:var(--mono);font-size:14px;min-width:18px;text-align:center;display:inline-block">3</span>
-      <button class="chip" data-des="1">+</button>
-      <button class="chip" id="rlkill">Kill a random pod</button>
-      <button class="chip" id="rlrogue">Spawn an untracked pod</button>
-      <button class="chip" id="rlpause">Pause loop</button>
-    </div>
-    <svg viewBox="0 0 720 130" role="img" aria-label="Pods matching a ReplicaSet, converging on desired count">
-      <defs>
-        <style>
-          .pod{stroke:#DCDDD4;stroke-width:1.5;rx:4}
-          .pod.ok{fill:#E8F6F0;stroke:#0B8A5B}
-          .pod.new{fill:#FFF4D6;stroke:#E8A317}
-          .pod.dying{fill:#FBEAEA;stroke:#C1121F}
-          .pod.rogue{fill:#F2F2EA;stroke:#4A4F58;stroke-dasharray:3 3}
-          .plab{font:400 9.5px 'JetBrains Mono',monospace;fill:#4A4F58}
-        </style>
-      </defs>
-      <g id="rlpods"></g>
-    </svg>
-    <div class="out" id="rllog" style="margin-top:14px;max-height:150px;overflow-y:auto"></div>
-  </div>
-  <div class="demonote">Killing a pod does not "fail" the ReplicaSet — an unplanned pod deletion and an intentional scale-down produce the identical diff: <code>observed &ne; desired</code>. The controller cannot tell your intent apart from a node dying, and it does not need to; it only ever asks whether the counts match. The untracked pod is left alone entirely: it does not carry this ReplicaSet's selector labels, so it is invisible to the loop's <code>List</code> call and is not "adopted" or destroyed.</div>
-</div>
-
-<script>
-(function(){
-  var state = { desired: 3, pods: [], tick: 0, paused: false, nextId: 1 };
-  function mkPod(status, rogue){ return {id: state.nextId++, status: status, rogue: !!rogue, x:0}; }
-  for (var i=0;i<3;i++) state.pods.push(mkPod('ok'));
-
-  var svgNS = 'http://www.w3.org/2000/svg';
-  var host = document.getElementById('rlpods');
-  var log = document.getElementById('rllog');
-  var statusEl = document.getElementById('rlstatus');
-
-  function line(t, cls){
-    var d = document.createElement('div');
-    if (cls) d.style.color = cls;
-    d.textContent = t;
-    log.insertBefore(d, log.firstChild);
-    while (log.children.length > 40) log.removeChild(log.lastChild);
-  }
-
-  function render(){
-    host.innerHTML = '';
-    var live = state.pods.filter(function(p){ return p.status !== 'gone'; });
-    live.forEach(function(p, i){
-      var g = document.createElementNS(svgNS,'g');
-      var x = 20 + i*88;
-      var r = document.createElementNS(svgNS,'rect');
-      r.setAttribute('x', x); r.setAttribute('y', 20); r.setAttribute('width', 74); r.setAttribute('height', 46);
-      r.setAttribute('class', 'pod ' + (p.rogue ? 'rogue' : p.status));
-      g.appendChild(r);
-      var t = document.createElementNS(svgNS,'text');
-      t.setAttribute('x', x+37); t.setAttribute('y', 48); t.setAttribute('text-anchor','middle');
-      t.setAttribute('class','plab');
-      t.textContent = (p.rogue ? 'untracked' : 'web-'+p.id);
-      g.appendChild(t);
-      var s = document.createElementNS(svgNS,'text');
-      s.setAttribute('x', x+37); s.setAttribute('y', 78); s.setAttribute('text-anchor','middle');
-      s.setAttribute('class','plab');
-      s.textContent = p.rogue ? '(no selector match)' : p.status;
-      g.appendChild(s);
-      host.appendChild(g);
-    });
-    var owned = live.filter(function(p){ return !p.rogue && p.status !== 'dying'; }).length;
-    statusEl.textContent = owned === state.desired ? 'converged' : ('reconciling · observed ' + owned + ' / desired ' + state.desired);
-  }
-
-  function tick(){
-    if (state.paused) return;
-    state.tick++;
-    var owned = state.pods.filter(function(p){ return !p.rogue && p.status !== 'gone'; });
-    var ready = owned.filter(function(p){ return p.status === 'ok'; }).length + owned.filter(function(p){return p.status==='new';}).length;
-    var trueOwned = owned.filter(function(p){ return p.status !== 'dying'; });
-
-    if (trueOwned.length < state.desired) {
-      var need = state.desired - trueOwned.length;
-      line('tick ' + state.tick + ' · diff: observed ' + trueOwned.length + ' < desired ' + state.desired + ' → creating ' + need);
-      for (var i=0;i<need;i++) state.pods.push(mkPod('new'));
-    } else if (trueOwned.length > state.desired) {
-      var extra = trueOwned.length - state.desired;
-      line('tick ' + state.tick + ' · diff: observed ' + trueOwned.length + ' > desired ' + state.desired + ' → deleting ' + extra);
-      var okOnes = trueOwned.filter(function(p){return p.status==='ok';});
-      for (var j=0;j<extra && j<okOnes.length;j++) okOnes[j].status = 'dying';
-    } else {
-      // settle any 'new' pods to 'ok', clear any lingering 'dying'
-      var changed = false;
-      state.pods.forEach(function(p){
-        if (!p.rogue && p.status === 'new'){ p.status = 'ok'; changed = true; }
-        if (!p.rogue && p.status === 'dying'){ p.status = 'gone'; changed = true; }
-      });
-      if (changed) line('tick ' + state.tick + ' · diff: observed == desired (' + state.desired + ') → no action');
-    }
-    state.pods = state.pods.filter(function(p){ return p.status !== 'gone'; });
-    render();
-  }
-
-  document.querySelectorAll('[data-des]').forEach(function(b){
-    b.addEventListener('click', function(){
-      var d = +b.dataset.des;
-      state.desired = Math.max(0, Math.min(8, state.desired + d));
-      line('edit · spec.replicas → ' + state.desired, '#1B4FD8');
-      render();
-    });
-  });
-  document.getElementById('rlkill').addEventListener('click', function(){
-    var live = state.pods.filter(function(p){ return !p.rogue && p.status==='ok'; });
-    if (!live.length) return;
-    var victim = live[Math.floor(Math.random()*live.length)];
-    victim.status = 'gone';
-    state.pods = state.pods.filter(function(p){ return p !== victim; });
-    line('node event · web-' + victim.id + ' terminated unexpectedly', '#C1121F');
-    render();
-  });
-  document.getElementById('rlrogue').addEventListener('click', function(){
-    state.pods.push(mkPod('ok', true));
-    line('external actor · pod created without this ReplicaSet’s labels', '#4A4F58');
-    render();
-  });
-  document.getElementById('rlpause').addEventListener('click', function(){
-    state.paused = !state.paused;
-    this.textContent = state.paused ? 'Resume loop' : 'Pause loop';
-    line(state.paused ? 'loop paused' : 'loop resumed');
-  });
-
-  render();
-  setInterval(tick, 1100);
-})();
-</script>
-
-<h2>1.5 Level-triggered, not edge-triggered</h2>
-
-<p>There are two ways to design a reactive system, and the difference between them explains why Kubernetes survives outages that would wreck a naively-built alternative.</p>
-
-<table>
-<thead><tr><th></th><th>Edge-triggered</th><th>Level-triggered</th></tr></thead>
-<tbody>
-<tr><td>Reacts to</td><td>The <em>event</em> — "a pod died"</td><td>The <em>state</em> — "observed differs from desired"</td></tr>
-<tr><td>If the event is missed</td><td>The system never finds out. State drifts silently.</td><td>The next reconcile pass re-derives the diff from current state and fixes it anyway.</td></tr>
-<tr><td>Consequence of running the handler twice</td><td>Often wrong — "restart it" fired twice can double-start a process.</td><td>Always safe — recomputing an already-zero diff does nothing.</td></tr>
-</tbody>
-</table>
-
-<p>Kubernetes uses watch events (Chapter 3) as a <em>trigger to look again</em>, never as the payload the controller acts on. A controller that received a "pod deleted" event and directly reacted with "so start a replacement" would be edge-triggered, and it would be one dropped event away from a permanently missing pod — a real risk, since watches disconnect, informer caches resync, and API servers restart mid-rollout. What every built-in controller actually does instead is: an event arrives, and it is treated purely as a hint to re-run the full <code>Compare(observed, desired)</code> from scratch. If the event that caused the drift was itself lost, the next resync period — a periodic full re-list, independent of any watch — catches it anyway. Miss every event for ten minutes and the system self-heals the moment the next full reconcile runs.</p>
-
-<div class="callout warn">
-  <span class="tag">Why this matters once you write your own controller</span>
-  <p>The most common bug in a hand-written operator (Chapter 22) is smuggling edge-triggered logic back in through the side door: reading a diff off the event object itself instead of re-listing current state, or maintaining counters that increment on "add" events and decrement on "delete" events. Both work in testing and both drift silently in production the first time an event is dropped, which the Kubernetes API explicitly does not promise never happens. The rule that keeps a controller correct: <strong>the only inputs to <code>Compare</code> are the current spec and the current, freshly observed state — never the event that triggered the pass.</strong></p>
-</div>
-
-<h2>1.6 Idempotency is not optional</h2>
-
-<p>Because the loop reruns unconditionally — on a timer, on every watch event, after every crash and restart — every action a controller takes must produce the same end state whether it runs once or fifty times in a row. This property, idempotency, is not a nice-to-have performance detail; it is the thing that makes "just run the loop again" a valid answer to failure at all.</p>
-
-<p>In practice this pushes controller authors toward a specific style: describe the target state and apply it, rather than describing a step and executing it.</p>
-
-<table>
-<thead><tr><th>Not idempotent</th><th>Idempotent</th></tr></thead>
-<tbody>
-<tr><td><code>replicas += 1</code></td><td><code>replicas = 3</code></td></tr>
-<tr><td><code>append toleration to list</code></td><td><code>ensure toleration X is present in list</code></td></tr>
-<tr><td><code>send webhook "scaled up"</code></td><td><code>PUT status.replicas = 3</code> (a webhook is a side effect with no idempotent form — it needs its own dedup key)</td></tr>
-</tbody>
-</table>
-
-<p>Notice the third row is the honest exception. Reconciliation makes <em>state transitions</em> idempotent for free by construction, because "make X true" run twice is still just X. It does nothing for one-shot side effects like sending a notification or calling an external API — those need their own idempotency key or dedup logic, because "notify Slack that we scaled up" run twice is two Slack messages. Recognising which of your controller's actions are state-setting versus which are genuine one-shot events is the actual design skill here, and it is precisely where naive operators go wrong.</p>
-
-<h2>1.7 Lab · read spec and status directly</h2>
-
-<p>You do not need a running cluster to see this split — every object you have ever created already has it. If you have a cluster available, this is worth running for real; if not, the shapes below are exactly what you would see.</p>
-
-<div class="lab">
-  <div class="labhead"><span>Shell · spec vs status, side by side</span><button data-copy>Copy</button></div>
-<pre><code># The full object: spec is what you wrote, status is the controller's report
-kubectl get deployment web -o yaml
-
-# Isolate just the part you own
-kubectl get deployment web -o jsonpath='{.spec.replicas}'
-
-# Isolate just the part the controller owns — this is the number that lags
-kubectl get deployment web -o jsonpath='{.status.replicas} ready={.status.readyReplicas}'
-
-# Watch the gap close in real time after a scale
-kubectl scale deployment web --replicas=5
-kubectl get deployment web -w
-#   NAME   READY   UP-TO-DATE   AVAILABLE   AGE
-#   web    3/5     5            3           2m     <- diff still open
-#   web    5/5     5            5           2m9s   <- converged
-
-# The generation fields prove reconciliation, not immediate execution
-kubectl get deployment web -o jsonpath='{.metadata.generation} vs {.status.observedGeneration}'
-# metadata.generation increments on every spec edit.
-# status.observedGeneration only catches up once a controller has reconciled that edit.
-# The two being unequal IS the "in progress" state — there is no separate flag for it.</code></pre>
-</div>
-
-<p>That last pair of fields is worth sitting with. Kubernetes does not track "is this deployment currently being reconciled" as a boolean anywhere. It is derived, on demand, by comparing two numbers. There is no state to get out of sync, because there is no state — just the same <code>Compare</code> function your dashboard, your CLI and the controller itself are all running against the same two objects.</p>
-
-<div class="quiz">
-  <h3>Knowledge check</h3>
-
-  <div class="q" data-answer="2">
-    <p class="qtext">A ReplicaSet's controller crashes mid-reconcile, after deleting one excess pod but before updating <code>status</code>. It restarts thirty seconds later. What must it do to recover?</p>
-    <div class="opts">
-      <button class="opt">Read a recovery log to find out which step it was on</button>
-      <button class="opt">Roll back the partial deletion, then retry from the start</button>
-      <button class="opt">Nothing special — run the same reconcile loop again; the fresh diff already reflects the deletion</button>
-      <button class="opt">Page an operator, since partial state requires manual intervention</button>
-    </div>
-    <p class="why">This is the payoff of idempotent, state-based reconciliation: there is no "step" to resume, because the loop never recorded taking one. It just re-observes current state — which already shows one fewer pod — recomputes the diff against desired state, and continues. Crash recovery and normal operation are the same code path.</p>
-  </div>
-
-  <div class="q" data-answer="1">
-    <p class="qtext">Which design is edge-triggered, and therefore fragile against a dropped watch event?</p>
-    <div class="opts">
-      <button class="opt">On every timer tick, list all pods matching the selector and compare the count to spec.replicas</button>
-      <button class="opt">On a "pod deleted" event, decrement an in-memory counter and create a new pod once the counter drops below the target</button>
-      <button class="opt">On a watch event of any kind, re-run List against the API and recompute the full diff</button>
-      <button class="opt">On a periodic full resync, re-derive desired vs observed from scratch regardless of what triggered it</button>
-    </div>
-    <p class="why">The counter in option 2 is state derived from the event stream itself. Miss one delete event and the counter is permanently wrong, with no self-correcting mechanism — the system has no way to notice the drift because it never re-derives the number from ground truth. Every other option treats the event as a mere signal to look at real state again.</p>
-  </div>
-
-  <div class="q" data-answer="0">
-    <p class="qtext">Which action, taken inside a reconcile function, is <em>not</em> naturally idempotent and needs its own dedup handling?</p>
-    <div class="opts">
-      <button class="opt">Sending a one-time Slack notification that a rollout completed</button>
-      <button class="opt">Setting a pod's label to a fixed value</button>
-      <button class="opt">Setting status.replicas to the freshly counted number of ready pods</button>
-      <button class="opt">Applying a ConfigMap with fixed, fully-specified contents</button>
-    </div>
-    <p class="why">"Set field X to value Y" run any number of times converges to the same state. A one-shot side effect like a notification has no such property — running the reconcile pass twice, which happens routinely, would send it twice unless the controller tracks separately whether it already fired.</p>
-  </div>
-
-  <div class="q" data-answer="3">
-    <p class="qtext"><code>metadata.generation</code> is 7 and <code>status.observedGeneration</code> is 6 on a Deployment. What does this tell you?</p>
-    <div class="opts">
-      <button class="opt">The object is corrupted and needs to be recreated</button>
-      <button class="opt">Six replicas are currently ready out of seven desired</button>
-      <button class="opt">A watch event was dropped and the controller missed an update</button>
-      <button class="opt">The most recent spec edit has not yet been picked up and reconciled by the controller</button>
-    </div>
-    <p class="why">generation counts spec edits, not replica counts, and it has nothing to do with dropped events — the controller will catch up on its own reconcile cadence regardless. The gap simply means: the latest desired state exists in etcd, but the controller has not yet finished (or even started) reconciling against it. This is the normal, momentary state of "an edit is in flight," visible with nothing more than two integers.</p>
-  </div>
-</div>
-
-<h2>1.8 What to carry into Chapter 2</h2>
-<ul>
-<li>Every object with a <code>spec</code> and a <code>status</code> is one half of a reconciliation loop — <code>spec</code> is the desired state you own, <code>status</code> is the controller's honest report of observed state.</li>
-<li>A control loop is just <code>Observe → Compare → Act</code>, repeated forever, with no memory of what it did last time.</li>
-<li>Level-triggered design — re-deriving the diff from current state, not from the event that fired — is what makes the system self-healing against dropped events and crashed controllers.</li>
-<li>State-setting actions get idempotency for free from this design. One-shot side effects do not, and need their own handling.</li>
-<li><code>metadata.generation</code> versus <code>status.observedGeneration</code> is reconciliation lag made visible as two integers, with no separate "in progress" flag anywhere.</li>
-</ul>
-
-<p>None of this loop can run anywhere until something durably stores the desired state, serves it to every controller watching for changes, and guarantees that two controllers racing to write it do not silently clobber each other. That something is the API server sitting in front of etcd — the subject of the next chapter.</p>
-
-<div class="donebar"></div>
-<nav class="chapfoot"></nav>
-</div>
 </main>
 </div>
+
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -1067,7 +759,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "microservices"; window.DEPTH = 1;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -1289,6 +981,64 @@ window.getCourse = function (id) {
   else init();
 })();
 
+</script>
+<script>
+(function(){
+  var course = getCourse();
+  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
+
+  document.getElementById('eyebrow').textContent =
+    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
+  document.getElementById('hero').textContent = course.hero;
+  document.getElementById('blurb').textContent = course.blurb;
+  document.getElementById('intro').innerHTML = written
+    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
+      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
+    : 'The outline below is final and cross-linked. Chapters are being written in order; '
+      + 'the interactive model in each one is the slow part and the point.';
+
+  var toc = document.getElementById('toc');
+
+  function itemHTML(c){
+    var done = Progress.isDone(c.n, course.id);
+    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
+    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
+    /* A cross-course reference can itself be a live <a>, and HTML forbids
+       nesting an <a> inside another <a> (the outer one silently closes at
+       the inner tag, corrupting everything after it). So the whole row is
+       always a <div>, and a full-cover "stretched link" handles click-to-
+       open navigation instead — the xref link sits above it (z-index,
+       see .tocstretch/.xref in <style>) and stays independently clickable. */
+    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
+    var inner = stretch +
+      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
+      '<span><span class="toctitle">' + c.title + '</span>' +
+      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
+      '<span class="tocstate">' + state + '</span>';
+    return '<div class="' + cls + '">' + inner + '</div>';
+  }
+
+  /* core.js calls this whenever the side-nav search or progress changes */
+  window.onCourseFilter = function(f){
+    var html = '', shown = 0;
+    course.parts.forEach(function(p){
+      var chs = course.chapters.filter(function(c){
+        if (c.n < p.range[0] || c.n > p.range[1]) return false;
+        if (!f) return true;
+        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
+      });
+      if (!chs.length) return;
+      shown += chs.length;
+      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
+      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
+      html += '</ul>';
+    });
+    toc.innerHTML = html;
+    document.getElementById('empty').style.display = shown ? 'none' : 'block';
+  };
+
+  window.onCourseFilter('');
+})();
 </script>
 </body>
 </html>
