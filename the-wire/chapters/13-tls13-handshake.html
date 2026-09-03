@@ -122,8 +122,9 @@ header.masthead{padding:0 0 30px;border-bottom:1px solid var(--rule);margin-bott
 .tocitem{
   display:grid;grid-template-columns:50px minmax(0,1fr) auto;column-gap:16px;align-items:start;
   padding:14px 12px;border-bottom:1px solid var(--rule);text-decoration:none;color:inherit;
-  transition:background .12s,padding-left .12s;
+  transition:background .12s,padding-left .12s;position:relative;
 }
+.tocstretch{position:absolute;inset:0;z-index:1}
 .tocitem:hover{background:#fff;padding-left:18px}
 .tocnum{font-family:var(--mono);font-size:12px;color:var(--client);font-weight:700;padding-top:3px}
 .toctitle{display:block;font-family:var(--display);font-weight:600;font-size:1.06rem;line-height:1.3;letter-spacing:-.01em}
@@ -262,7 +263,7 @@ svg{max-width:100%;height:auto;display:block}
 
 /* ============ cross-course references ============ */
 .xrefs{display:block;margin-top:9px;display:flex;flex-direction:column;gap:4px}
-.xref{display:block;font-family:var(--mono);font-size:10.5px;line-height:1.5;padding-left:13px;position:relative}
+.xref{display:block;font-family:var(--mono);font-size:10.5px;line-height:1.5;padding-left:13px;position:relative;z-index:2}
 .xref::before{content:"\2197";position:absolute;left:0;top:0;color:var(--server);font-size:10px}
 .xref a{text-decoration:none;color:var(--client);border-bottom:1px solid rgba(27,79,216,.28)}
 .xref a:hover{border-bottom-color:var(--client)}
