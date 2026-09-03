@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>3 · Hashing and integrity — The Wire</title>
+<title>4 · Controllers and informers — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -297,7 +297,7 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-the-wire" data-chapter="3">
+<body class="course-kubernetes" data-chapter="4">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
@@ -305,329 +305,254 @@ svg{max-width:100%;height:auto;display:block}
 <nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part II &nbsp;·&nbsp; Cryptographic primitives &nbsp;·&nbsp; Chapter 03</p>
-  <h1>Hashing and integrity</h1>
-  <p class="lede">A hash function compresses any input to a fixed-size fingerprint. That sounds trivial and is not: the value of the construction lies entirely in what it makes <em>hard</em>, and there are three distinct hardness properties that people routinely conflate — with consequences ranging from awkward to catastrophic.</p>
+  <p class="eyebrow">Part I &nbsp;&middot;&nbsp; The model &nbsp;&middot;&nbsp; Chapter 04</p>
+  <h1>Controllers and informers</h1>
+  <p class="lede">Reconciliation looks simple as an idea. This is what it looks like as running code: a shared cache kept warm by one watch per resource type, a deduplicating queue of bare object keys, and a worker that never trusts an event any further than "go look again."</p>
 </header>
 
 <div class="col">
 
-<h2>3.1 The three properties, and why they are not the same</h2>
+<h2>4.1 The machine every controller is built from</h2>
 
-<p>A cryptographic hash <code>H</code> maps arbitrary-length input to a fixed <code>n</code>-bit output. Since the input space is infinite and the output space is not, collisions <em>must</em> exist. Security is not about their absence but about the cost of finding one.</p>
+<p>Chapter 1 described reconciliation as an abstract loop: observe, compare, act, repeat. This chapter is what that loop is actually made of in every real Kubernetes controller — the built-ins and the operator you install next quarter alike, because nearly all of them are built on the same library, <code>client-go</code>, and that library gives you exactly one recommended shape for a controller. Understanding this shape is what turns "the reconciler re-derives state from scratch" from a design principle into a piece of code you can read.</p>
 
-<table>
-<thead><tr><th>Property</th><th>Adversary's task</th><th>Ideal cost, n-bit output</th><th>SHA-256</th></tr></thead>
-<tbody>
-<tr><td>Preimage resistance</td><td>Given <code>h</code>, find any <code>m</code> with <code>H(m)=h</code></td><td>2<sup>n</sup></td><td>2<sup>256</sup></td></tr>
-<tr><td>Second-preimage resistance</td><td>Given <code>m₁</code>, find <code>m₂ ≠ m₁</code> with <code>H(m₂)=H(m₁)</code></td><td>2<sup>n</sup></td><td>2<sup>256</sup></td></tr>
-<tr><td>Collision resistance</td><td>Find <em>any</em> pair <code>m₁ ≠ m₂</code> with equal hashes</td><td>2<sup>n/2</sup></td><td>2<sup>128</sup></td></tr>
-</tbody>
-</table>
+<p>A controller built this way has three cooperating pieces, and they have three different jobs that are easy to blur together if you have not seen them named separately:</p>
 
-<p>The collision bound is half the exponent, and this is the birthday paradox doing the damage. With 23 people in a room the odds of a shared birthday exceed 50%, because you are comparing all 253 <em>pairs</em>, not each person against a fixed date. The same combinatorics apply to hashes: after roughly 2<sup>n/2</sup> outputs you expect a repeat. This is why a 256-bit hash gives 128-bit collision security, and why 128-bit hashes are useless for signatures.</p>
+<ol>
+<li>An <strong>informer</strong>, which watches the API server and keeps a local, eventually-consistent cache of objects up to date.</li>
+<li>A <strong>work queue</strong>, which receives a trickle of "something about this object may have changed" notifications and de-duplicates them.</li>
+<li>A <strong>worker loop</strong>, which pulls items off the queue and runs your actual reconcile function against the local cache — never against a live API call.</li>
+</ol>
 
-<div class="callout warn">
-  <span class="tag">Choosing the property you need</span>
-  <p>Ask whether the attacker controls <em>both</em> messages. If they do — as in a certificate they submit for signing, or a document they draft — you need collision resistance, and MD5 and SHA-1 are both dead. If they only get to attack a message you chose, second-preimage resistance suffices and SHA-1 is technically still standing. Use SHA-256 regardless; the distinction matters for understanding old systems, not for designing new ones.</p>
+<h2>4.2 The informer: one watch, shared by everyone</h2>
+
+<p>If every controller interested in Pods opened its own watch connection to the API server, a cluster running twenty controllers that each care about Pods would open twenty redundant watch streams, each independently re-listing and re-caching the same objects. The <strong>shared informer</strong> exists specifically to prevent this: one watch per GVK, per process, shared by every controller inside that process that registers interest in it.</p>
+
+<pre><code>informer := factory.Core().V1().Pods().Informer()
+
+informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+    AddFunc:    func(obj interface{}) { enqueue(obj) },
+    UpdateFunc: func(old, new interface{}) { enqueue(new) },
+    DeleteFunc: func(obj interface{}) { enqueue(obj) },
+})
+// A second controller in the same process registers its own handler on
+// the SAME informer instance — no second watch is opened.</code></pre>
+
+<p>The informer's cache, called a <strong>lister</strong> from the read side, is what your reconcile function actually queries — never a live <code>GET</code> to the API server. This is a deliberate trade: the cache can be a few hundred milliseconds stale, but reading it costs nothing and scales to however many reconciles you need to run per second, where issuing a live API call per reconcile would fall over under real cluster load and add latency the API server would have to absorb from every controller simultaneously.</p>
+
+<div class="callout">
+  <span class="tag">The rule this implies</span>
+  <p>Reconcile functions read from the lister and write through the API client — never the reverse. Reading your own write back from the cache immediately after issuing it is a common bug: the cache has not caught up yet, so the read appears to show the old state, and a naive controller "corrects" a change it just made itself.</p>
 </div>
 
-<h3>How the breaks actually happened</h3>
-<ul>
-<li><strong>MD5.</strong> Collisions found in 2004; by 2008 researchers used chosen-prefix collisions to obtain a rogue CA certificate that browsers accepted. The Flame malware (2012) used an MD5 collision against a Microsoft certificate to forge Windows Update signatures. Chosen-prefix collisions on MD5 now cost seconds.</li>
-<li><strong>SHA-1.</strong> SHAttered (2017) produced two PDFs with the same SHA-1 at a cost of about 6,500 CPU-years, then SHA-1 is a Shambles (2020) demonstrated a <em>chosen-prefix</em> collision for around $45,000. Chosen-prefix is the dangerous kind: it lets the attacker pick meaningful, differing content on both sides.</li>
-</ul>
+<h2>4.3 The work queue: notifications, not payloads</h2>
 
-<h2>3.2 The avalanche effect, seen directly</h2>
+<p>Here is the detail that makes level-triggered design concrete rather than aspirational. When an event handler fires — Add, Update or Delete — it does not enqueue the object, or a diff, or anything describing <em>what changed</em>. It enqueues a <strong>key</strong>: just the namespace and name, a bare pointer saying "go look at this one again."</p>
 
-<p>A good hash behaves like a random function. Change one bit of input and each output bit should flip with probability ½ — so about half the 256 bits change. Anything less is a statistical distinguisher, and distinguishers are how attacks begin.</p>
+<pre><code>func enqueue(obj interface{}) {
+    key, _ := cache.MetaNamespaceKeyFunc(obj)
+    queue.Add(key)   // "default/web-7f9c" — nothing else. Not a diff, not a reason.
+}
 
-<p>Type in the box. The second input is the first with one character altered; the panel counts exactly how many output bits differ.</p>
+func worker() {
+    for queue.Len() > 0 {
+        key, _ := queue.Get()
+        err := reconcile(key)          // re-reads current state from the lister
+        if err != nil {
+            queue.AddRateLimited(key)  // retry with backoff
+        } else {
+            queue.Forget(key)
+        }
+        queue.Done(key)
+    }
+}</code></pre>
+
+<p>This single design choice is what makes the work queue self-healing against a burst of events. The queue is a <strong>set</strong>, not a list — adding a key that is already queued is a no-op, and adding a key that is currently being processed marks it "dirty" so it gets re-queued the instant the current run finishes. A pod that flaps between Ready and NotReady five times in one second produces one reconcile pass at the end of that burst, not five — because all five enqueue calls carried the same bare key, and the reconcile function re-derives current state fresh each time it actually runs. Nothing about what triggered a queue entry survives into the reconcile call; only "this key needs another look" does.</p>
+
+<h2>4.4 Watch the queue absorb a burst</h2>
+
+<p>The demo below fires a rapid sequence of Add/Update/Delete events for a small set of objects and shows what actually reaches the worker — a deduplicated set of keys, processed once each, regardless of how many events piled up in between.</p>
 
 <div class="demo">
-  <div class="demohead"><span>Interactive · SHA-256 avalanche</span><span id="avstat">—</span></div>
+  <div class="demohead"><span>Interactive · informer events → work queue → worker</span><span id="wqstat">idle</span></div>
   <div class="demobody">
-    <div class="ctl" style="display:block">
-      <label for="ha">Message A</label>
-      <input id="ha" type="text" value="the balance is 100" style="width:100%;margin:6px 0 12px">
-      <label for="hb">Message B</label>
-      <input id="hb" type="text" value="the balance is 900" style="width:100%;margin:6px 0 0">
+    <div class="ctl">
+      <label>Fire events for</label>
+      <button class="chip" data-obj="pod-a">pod-a</button>
+      <button class="chip" data-obj="pod-b">pod-b</button>
+      <button class="chip" data-obj="pod-c">pod-c</button>
+      <button class="chip" id="wqburst">Burst: flap pod-a ×5</button>
+      <button class="chip" id="wqclear">Reset</button>
     </div>
-    <div style="margin-top:16px">
-      <div style="font:700 10px 'JetBrains Mono',monospace;letter-spacing:.14em;color:#4A4F58;margin-bottom:5px">SHA-256(A)</div>
-      <div class="out" id="oa"></div>
-      <div style="font:700 10px 'JetBrains Mono',monospace;letter-spacing:.14em;color:#4A4F58;margin:14px 0 5px">SHA-256(B) — differing hex digits highlighted</div>
-      <div class="out hexdump" id="ob"></div>
-      <div style="font:700 10px 'JetBrains Mono',monospace;letter-spacing:.14em;color:#4A4F58;margin:14px 0 5px">Bit-level difference (each cell is one output bit)</div>
-      <svg id="bits" viewBox="0 0 640 90" style="border:1px solid #DCDDD4;background:#FBFBF7"></svg>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:6px">Events received</div>
+        <div class="out" id="wqevents" style="max-height:180px;overflow-y:auto;font-size:11.5px">—</div>
+      </div>
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:6px">Reconciles that actually ran</div>
+        <div class="out" id="wqreconciles" style="max-height:180px;overflow-y:auto;font-size:11.5px">—</div>
+      </div>
     </div>
   </div>
-  <div class="demonote">Two inputs differing in a single character produce outputs with no visible relationship. That unpredictability is the whole product: it means a hash reveals nothing about its input, and that near-misses give an attacker no gradient to climb.</div>
+  <div class="demonote">The queue's set semantics collapse the five flap events on the left into a small number of reconciles on the right — and every reconcile that does run reads current (post-flap) state, not any particular event's payload, because the key carries no payload to read.</div>
 </div>
 
-<h2>3.3 Merkle–Damgård, and the length-extension trap</h2>
+<script>
+(function(){
+  var events = [], reconciles = [];
+  var queued = {}, processing = null;
+  var evEl = document.getElementById('wqevents');
+  var rcEl = document.getElementById('wqreconciles');
+  var stat = document.getElementById('wqstat');
+  var seq = 1;
 
-<p>SHA-1, SHA-256 and SHA-512 share the Merkle–Damgård construction: pad the message, split it into blocks, and iterate a compression function, carrying an internal state forward. The final state <em>is</em> the digest.</p>
+  function render(){
+    evEl.innerHTML = events.slice(-14).map(function(e){return e;}).join('<br>') || '—';
+    rcEl.innerHTML = reconciles.slice(-14).map(function(r){return r;}).join('<br>') || '—';
+    evEl.scrollTop = evEl.scrollHeight; rcEl.scrollTop = rcEl.scrollHeight;
+    stat.textContent = Object.keys(queued).length ? 'queue: ' + Object.keys(queued).join(', ') : 'idle';
+  }
 
-<pre><code>IV ──▶[ f ]──▶ s₁ ──▶[ f ]──▶ s₂ ──▶[ f ]──▶ s₃ = digest
-        ▲              ▲              ▲
-      block₁         block₂        block₃(+padding)</code></pre>
+  function fireEvent(key, kind){
+    events.push(seq+'. '+kind+' default/'+key);
+    seq++;
+    enqueue(key);
+    render();
+  }
 
-<p>The flaw is that the output is the entire internal state. An attacker who knows <code>H(m)</code> and the <em>length</em> of <code>m</code> can load that state into the compression function and keep going — computing <code>H(m ‖ padding ‖ suffix)</code> for a suffix of their choosing, <strong>without knowing <code>m</code> at all</strong>.</p>
+  function enqueue(key){
+    queued[key] = true;
+  }
 
-<div class="callout bad">
-  <span class="tag">The classic exploitation</span>
-  <p>A naive API authenticates requests with <code>token = SHA256(secret ‖ message)</code>. Given one valid <code>(message, token)</code> pair and a guess at the secret's length, an attacker computes a valid token for <code>message ‖ padding ‖ &amp;admin=true</code> without ever learning the secret. Flickr's API fell to exactly this in 2009. The fix is not a longer secret. It is to stop hand-rolling MACs and use HMAC.</p>
-</div>
+  function drain(){
+    var keys = Object.keys(queued);
+    if (!keys.length) return;
+    keys.forEach(function(key){
+      delete queued[key];
+      reconciles.push('reconcile(default/'+key+') — reads current state fresh');
+    });
+    render();
+  }
 
-<p>SHA-3 (Keccak) uses a sponge construction and absorbs input into a state larger than the output, keeping part of it permanently hidden. It is not vulnerable to length extension. SHA-512/256 — SHA-512 truncated to 256 bits — is also immune, because the withheld half of the state cannot be reconstructed.</p>
+  document.querySelectorAll('[data-obj]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var kinds = ['Add','Update','Delete'];
+      fireEvent(b.dataset.obj, kinds[Math.floor(Math.random()*kinds.length)]);
+      setTimeout(drain, 350);
+    });
+  });
+  document.getElementById('wqburst').addEventListener('click', function(){
+    for (var i=0;i<5;i++){
+      (function(i){ setTimeout(function(){ fireEvent('pod-a', 'Update'); }, i*60); })(i);
+    }
+    setTimeout(drain, 500);
+  });
+  document.getElementById('wqclear').addEventListener('click', function(){
+    events = []; reconciles = []; queued = {}; seq = 1; render();
+  });
 
-<h2>3.4 HMAC — the right way to key a hash</h2>
+  render();
+})();
+</script>
 
-<p>HMAC (RFC 2104) turns an unkeyed hash into a message authentication code with a nested structure that provably avoids the length-extension problem:</p>
+<h2>4.5 Resync: the safety net under the safety net</h2>
 
-<pre><code>HMAC(K, m) = H( (K′ ⊕ opad) ‖ H( (K′ ⊕ ipad) ‖ m ) )
+<p>Even a perfectly reliable watch stream only tells a controller about changes. It says nothing about a bug in the controller's own last reconcile — an action that silently failed halfway, or a piece of external state (a cloud load balancer, a DNS record) that drifted without any Kubernetes object changing at all. The shared informer factory addresses this with a <strong>resync period</strong>: on a fixed interval, independent of any watch activity, it re-emits an Update event for every object currently in the cache, even ones that have not actually changed.</p>
 
-  K′    = K padded to the hash's block size (64 bytes for SHA-256),
-          or H(K) first if K is longer than the block size
-  ipad  = 0x36 repeated to block size
-  opad  = 0x5c repeated to block size</code></pre>
+<p>This means every object gets reconciled at least once per resync period no matter what — typically every 30 seconds to a few minutes, configurable per informer factory. Combined with the dropped-watch recovery from Chapters 2 and 3, resync is the second of two independent nets under the same guarantee: <em>nothing depends on any single event ever having been delivered correctly.</em> One net catches lost events; the other catches silent divergence that never generated an event to lose in the first place.</p>
 
-<p>The outer hash is the point. The attacker sees only <code>H(opad-block ‖ inner-digest)</code>, and extending that requires knowing the key. HMAC's security was proved to reduce to the compression function being a pseudorandom function — notably, it does <em>not</em> require collision resistance, which is why HMAC-MD5 remained unbroken long after MD5 itself was destroyed for signatures.</p>
-
-<h3>MAC versus signature</h3>
-<table>
-<thead><tr><th></th><th>MAC (HMAC)</th><th>Signature (Ch. 7)</th></tr></thead>
-<tbody>
-<tr><td>Key</td><td>One shared secret</td><td>Private to sign, public to verify</td></tr>
-<tr><td>Who can verify</td><td>Only holders of the key</td><td>Anybody</td></tr>
-<tr><td>Non-repudiation</td><td>No — either party could have made it</td><td>Yes</td></tr>
-<tr><td>Speed</td><td>Microseconds</td><td>Hundreds of microseconds to milliseconds</td></tr>
-<tr><td>Used in TLS for</td><td>Record integrity, key derivation, Finished</td><td>Proving certificate key ownership</td></tr>
-</tbody>
-</table>
-
-<h2>3.5 Hashing passwords is a different job entirely</h2>
-
-<p>This is the most consequential misuse in the field, so state it plainly: <strong>SHA-256 is the wrong tool for passwords, precisely because it is fast.</strong> Speed is a feature for integrity and a catastrophe for password storage. Modern hardware computes billions of SHA-256 operations per second, and human passwords come from a search space small enough to enumerate.</p>
-
-<p>Password hashing needs three additional things:</p>
-<ul>
-<li><strong>A salt</strong> — unique random data per password, stored alongside it. Defeats precomputed rainbow tables and stops identical passwords from producing identical hashes.</li>
-<li><strong>Deliberate slowness</strong> — a tunable work factor so verification costs, say, 100 ms and offline cracking becomes economically painful.</li>
-<li><strong>Memory hardness</strong> — a large memory requirement per guess, which is what breaks GPU and ASIC parallelism. This is Argon2's central contribution.</li>
-</ul>
-
-<table>
-<thead><tr><th>Function</th><th>Status</th><th>Reasonable parameters (2026)</th></tr></thead>
-<tbody>
-<tr><td>Argon2id</td><td>Preferred. Winner of the Password Hashing Competition.</td><td>m=64&nbsp;MiB, t=3, p=4</td></tr>
-<tr><td>scrypt</td><td>Good. Memory-hard.</td><td>N=2<sup>17</sup>, r=8, p=1</td></tr>
-<tr><td>bcrypt</td><td>Acceptable. Not memory-hard; silently truncates at 72 bytes.</td><td>cost ≥ 12</td></tr>
-<tr><td>PBKDF2-HMAC-SHA256</td><td>Use only where compliance demands it. GPU-friendly.</td><td>≥ 600,000 iterations</td></tr>
-<tr><td>Plain SHA-256 / MD5</td><td>Broken for this purpose regardless of salt.</td><td>—</td></tr>
-</tbody>
-</table>
-
-<p>Chapter 19 covers the surrounding practice: peppering, rehashing on login when parameters change, and why passkeys make much of this moot.</p>
-
-<h2>3.6 Where hashes show up in this course</h2>
-<ul>
-<li><strong>Merkle trees</strong> — hash pairs of hashes into a tree; the root commits to every leaf, and a logarithmic proof shows a leaf's inclusion. Certificate Transparency logs are Merkle trees (Ch. 11), as are Git and blockchains.</li>
-<li><strong>Certificate fingerprints</strong> — the SHA-256 of the DER encoding, used for pinning and for identifying a certificate compactly (Ch. 9).</li>
-<li><strong>HKDF</strong> — extract-then-expand key derivation built on HMAC. The entire TLS 1.3 key schedule is HKDF (Ch. 13).</li>
-<li><strong>Transcript hash</strong> — the running hash of every handshake message, which is what makes downgrade attacks fail (Ch. 12).</li>
-<li><strong>Subresource Integrity</strong> — <code>integrity="sha384-…"</code> on a script tag, so a compromised CDN cannot alter the file (Ch. 18).</li>
-</ul>
-
-<h2>3.7 Lab</h2>
+<h2>4.6 Lab · read the shape of a controller from its logs</h2>
 
 <div class="lab">
-  <div class="labhead"><span>Shell · hashing in practice</span><button data-copy>Copy</button></div>
-<pre><code># Basic digests
-echo -n "the balance is 100" | openssl dgst -sha256
-echo -n "the balance is 900" | openssl dgst -sha256   # compare: nothing in common
+  <div class="labhead"><span>Shell · informer and queue behaviour, made visible</span><button data-copy>Copy</button></div>
+<pre><code># Most controllers expose queue depth and reconcile counts as Prometheus metrics —
+# this is the work queue from 4.3, instrumented
+kubectl get --raw /metrics 2>/dev/null | grep workqueue_ ; \
+  kubectl -n kube-system exec deploy/some-controller -- \
+  wget -qO- localhost:8080/metrics | grep -E "workqueue_(depth|adds_total|retries_total)"
 
-# Note -n. Without it, echo appends a newline and you hash a different message.
-# This trips up almost everyone at least once.
+# workqueue_depth          — items currently queued, deduplicated
+# workqueue_adds_total     — every enqueue call ever made, including duplicates
+# workqueue_retries_total  — reconciles that returned an error and were re-queued
 
-# SHA-3 and the length-extension-immune SHA-512/256
-echo -n "hello" | openssl dgst -sha3-256
-echo -n "hello" | openssl dgst -sha512-256
+# A widening gap between adds_total and the actual reconcile count over time is
+# exactly the queue collapsing duplicate keys — the mechanism in 4.4, in production
 
-# HMAC with a key
-echo -n "message" | openssl dgst -sha256 -hmac "shared-secret"
+# controller-runtime (the framework most modern operators use) logs each
+# reconcile call with its key — watch a burst of changes collapse into fewer calls
+kubectl logs -n my-operator deploy/my-operator -f | grep "Reconciling"
 
-# Verify a downloaded file against a published digest
-sha256sum ./file.tar.gz
-# ...and against a checksum file
-sha256sum -c SHA256SUMS 2>/dev/null | grep -v ': OK'
-
-# Password hashing, done correctly (note the cost of a *single* hash)
-time python3 -c "
-import argon2
-h = argon2.PasswordHasher(memory_cost=65536, time_cost=3, parallelism=4)
-print(h.hash('correct horse battery staple'))"
-
-# Certificate fingerprint — the same primitive, applied to a cert
-openssl s_client -connect example.com:443 </dev/null 2>/dev/null \
-  | openssl x509 -noout -fingerprint -sha256</code></pre>
+# Force a resync-driven reconcile you did not cause with a watch event:
+# just wait. Nothing needs to change for one to fire.
+kubectl logs -n my-operator deploy/my-operator -f --since=2m | grep -c "Reconciling"
+# a nonzero count with zero corresponding kubectl edits in that window is resync</code></pre>
 </div>
 
 <div class="quiz">
   <h3>Knowledge check</h3>
 
   <div class="q" data-answer="2">
-    <p class="qtext">Why does a 256-bit hash offer only 128 bits of collision resistance?</p>
+    <p class="qtext">Why does an informer's work queue store bare object keys (namespace/name) rather than the event payload that triggered the enqueue?</p>
     <div class="opts">
-      <button class="opt">Half the output bits are structurally predictable</button>
-      <button class="opt">Only half the internal state is used in the final round</button>
-      <button class="opt">The birthday bound — with ~2^128 outputs a repeat becomes likely, since all pairs are compared</button>
-      <button class="opt">Because 128 bits is the maximum any hash can achieve</button>
+      <button class="opt">Keys use less memory than full objects</button>
+      <button class="opt">The API server does not allow event payloads to be queued client-side</button>
+      <button class="opt">It forces the reconcile function to re-read current state from the lister every time, which is what makes duplicate and out-of-order events harmless</button>
+      <button class="opt">Payloads are only available for Add events, not Update or Delete</button>
     </div>
-    <p class="why">The attacker is not aiming at a fixed target; they are collecting outputs and comparing every pair. The number of pairs grows quadratically, so a repeat is expected after roughly the square root of the output space — 2^128 for a 256-bit hash.</p>
+    <p class="why">Memory is a real but secondary benefit. The load-bearing reason is correctness: if reconcile logic ever consumed the event payload directly, processing the same key twice with two different payloads (or an old payload racing a new one) could produce different, order-dependent outcomes. A bare key forces every reconcile to re-derive truth from the lister, which is what guarantees idempotent, order-independent behaviour.</p>
   </div>
 
   <div class="q" data-answer="1">
-    <p class="qtext">An API computes <code>token = SHA256(secret ‖ message)</code>. What is the attacker's best move given one valid pair?</p>
+    <p class="qtext">A Pod flaps five times in rapid succession, generating five Update events. Roughly how many times does its reconcile function run as a result, assuming the queue is not already processing that key when the burst starts?</p>
     <div class="opts">
-      <button class="opt">Brute-force the secret offline</button>
-      <button class="opt">Length-extension: append chosen data and compute a valid token without knowing the secret</button>
-      <button class="opt">Find a SHA-256 collision</button>
-      <button class="opt">Nothing — SHA-256 is unbroken, so the scheme is sound</button>
+      <button class="opt">Exactly five, once per event</button>
+      <button class="opt">One or two — the queue's set semantics collapse duplicate enqueues of the same key while one is pending or in flight</button>
+      <button class="opt">Zero — flapping events are filtered out by the informer before reaching the queue</button>
+      <button class="opt">It depends on the resync period, not the event count</button>
     </div>
-    <p class="why">Merkle–Damgård outputs the full internal state, so the attacker resumes hashing from the published digest. They need only guess the secret's length, which is a handful of tries. The scheme is broken by construction even though SHA-256 itself is perfectly healthy — which is the point of using HMAC instead.</p>
-  </div>
-
-  <div class="q" data-answer="0">
-    <p class="qtext">Why is Argon2id preferred over PBKDF2 for password storage?</p>
-    <div class="opts">
-      <button class="opt">It is memory-hard, so GPU and ASIC parallelism gives an attacker far less advantage</button>
-      <button class="opt">It produces longer output digests</button>
-      <button class="opt">It does not need a salt</button>
-      <button class="opt">It is faster to verify</button>
-    </div>
-    <p class="why">PBKDF2 is just iterated HMAC — cheap in silicon, so a GPU farm runs thousands of guesses in parallel. Argon2id demands large working memory per guess, and memory does not parallelise cheaply. Both still need salts, and neither should be fast.</p>
+    <p class="why">The queue is a deduplicating set. Five enqueues of the same key while it is already queued (or one re-add for the "dirty" mark if it's mid-processing) collapse to at most a couple of actual reconcile calls, each reading whatever the current state happens to be by the time it runs.</p>
   </div>
 
   <div class="q" data-answer="3">
-    <p class="qtext">Two parties share a symmetric key and use HMAC to authenticate messages. Party A later denies sending a message. What can be proved?</p>
+    <p class="qtext">A controller's reconcile function calls the API server directly to re-GET an object it just modified, immediately after writing it, and finds the old value still present. What is the most likely cause?</p>
     <div class="opts">
-      <button class="opt">That A sent it, since only A could produce the tag</button>
-      <button class="opt">Nothing — HMAC provides no integrity</button>
-      <button class="opt">That the message was not modified, and that A sent it</button>
-      <button class="opt">That the message was not modified, and that one of A or B produced the tag — but not which</button>
+      <button class="opt">The write silently failed and needs to be retried</button>
+      <button class="opt">resourceVersion was stale, so the write was rejected</button>
+      <button class="opt">Reads should never be issued as live GETs inside a reconcile loop at all</button>
+      <button class="opt">A live GET can race ahead of the write propagating to whatever the controller reads from — this is exactly why reconcile functions are expected to read from the shared informer's lister cache, which lags slightly behind the API server by design</button>
     </div>
-    <p class="why">Both parties hold the same key, so either could have produced a valid tag. HMAC gives integrity and authentication between the pair, but no non-repudiation against a third party. That needs a signature, where only one party holds the signing key.</p>
+    <p class="why">This describes the read-your-own-write trap named in 4.2, and the cache lag it points at is inherent to any cache, live GET included in some deployments with API server load balancing across replicas. The fix is architectural: reconcile from the lister, treat brief staleness as expected, and let idempotent reconciliation (Chapter 1) absorb the lag on the next pass rather than trying to eliminate it.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">An informer's resync period fires an Update event for an object that has not actually changed since the last reconcile. What is this event actually protecting against?</p>
+    <div class="opts">
+      <button class="opt">Clock drift between the API server and the controller</button>
+      <button class="opt">Silent divergence that never generated a watch event at all — a partially-failed prior action, or drift in state the controller manages outside Kubernetes entirely</button>
+      <button class="opt">The work queue running out of capacity</button>
+      <button class="opt">Duplicate keys accumulating in the informer's local cache</button>
+    </div>
+    <p class="why">A dropped or delayed watch event is already covered by reconnect-and-relist behaviour from Chapters 2 and 3. Resync exists for the case where nothing was ever dropped because nothing ever fired — the controller's own earlier action silently failed, or some state it manages (a cloud resource, a DNS record) drifted without any Kubernetes object changing to generate an event in the first place.</p>
   </div>
 </div>
 
-<h2>3.8 Carry forward</h2>
+<h2>4.7 What to carry into Chapter 5</h2>
 <ul>
-<li>Collision resistance is half the output length; pick the property your threat actually needs.</li>
-<li>Merkle–Damgård hashes leak their internal state, so never build a MAC as <code>H(secret ‖ message)</code>. Use HMAC.</li>
-<li>Fast is right for integrity and wrong for passwords. Different job, different function.</li>
-<li>MACs authenticate between two parties who share a key; signatures authenticate to everyone.</li>
+<li>A controller is three parts: a shared informer maintaining a local cache, a deduplicating work queue of bare object keys, and a worker loop that reconciles from the cache, never from the triggering event.</li>
+<li>One informer per GVK is shared by every controller in the same process — not one watch per controller.</li>
+<li>The work queue's set semantics are what make bursts of duplicate or rapid events collapse into a small, bounded number of reconciles.</li>
+<li>Resync is a second, independent safety net under the watch stream: every object gets reconciled periodically regardless of whether anything actually changed or any event was ever delivered.</li>
+<li>Reconcile functions read from the cache and write through the API — reversing that direction reintroduces the races this whole design exists to avoid.</li>
 </ul>
+
+<p>Everything up to here has been about <em>state</em> — how it is declared, stored, watched and reconciled. The next part turns to what a reconcile loop actually does with a Pod object once it decides one needs to exist somewhere: choosing which node, which is the scheduler's entire job.</p>
 
 <div class="donebar"></div>
 <nav class="chapfoot"></nav>
 </div>
 </main>
 </div>
-
-<script>
-/* Compact, dependency-free SHA-256. Works offline and over file:// where
-   crypto.subtle may be unavailable. Not constant-time — teaching use only. */
-window.sha256 = (function () {
-  var K = [
-    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
-
-  function rr(x,n){ return (x>>>n)|(x<<(32-n)); }
-
-  function bytes(str){
-    var utf8 = unescape(encodeURIComponent(str)), out = [];
-    for (var i=0;i<utf8.length;i++) out.push(utf8.charCodeAt(i));
-    return out;
-  }
-
-  return function (msg) {
-    var m = (typeof msg === 'string') ? bytes(msg) : Array.prototype.slice.call(msg);
-    var H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
-    var bitLen = m.length * 8;
-    m.push(0x80);
-    while (m.length % 64 !== 56) m.push(0);
-    for (var i=7;i>=0;i--) m.push((i<4) ? (Math.floor(bitLen/Math.pow(2,8*i)) & 0xff) : 0);
-    /* high 32 bits of length assumed zero for teaching inputs */
-
-    var w = new Array(64);
-    for (var off=0; off<m.length; off+=64) {
-      for (var t=0;t<16;t++)
-        w[t] = (m[off+4*t]<<24)|(m[off+4*t+1]<<16)|(m[off+4*t+2]<<8)|(m[off+4*t+3]);
-      for (t=16;t<64;t++){
-        var s0 = rr(w[t-15],7)^rr(w[t-15],18)^(w[t-15]>>>3);
-        var s1 = rr(w[t-2],17)^rr(w[t-2],19)^(w[t-2]>>>10);
-        w[t] = (w[t-16]+s0+w[t-7]+s1)|0;
-      }
-      var a=H[0],b=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
-      for (t=0;t<64;t++){
-        var S1 = rr(e,6)^rr(e,11)^rr(e,25);
-        var ch = (e&f)^((~e)&g);
-        var t1 = (h+S1+ch+K[t]+w[t])|0;
-        var S0 = rr(a,2)^rr(a,13)^rr(a,22);
-        var mj = (a&b)^(a&c)^(b&c);
-        var t2 = (S0+mj)|0;
-        h=g; g=f; f=e; e=(d+t1)|0; d=c; c=b; b=a; a=(t1+t2)|0;
-      }
-      H=[(H[0]+a)|0,(H[1]+b)|0,(H[2]+c)|0,(H[3]+d)|0,(H[4]+e)|0,(H[5]+f)|0,(H[6]+g)|0,(H[7]+h)|0];
-    }
-    return H.map(function(x){ return ('00000000'+(x>>>0).toString(16)).slice(-8); }).join('');
-  };
-})();
-
-</script>
-<script>
-(function(){
-  var A=document.getElementById('ha'), B=document.getElementById('hb');
-  var oa=document.getElementById('oa'), ob=document.getElementById('ob');
-  var bits=document.getElementById('bits'), stat=document.getElementById('avstat');
-  var NS='http://www.w3.org/2000/svg';
-
-  function run(){
-    var x=sha256(A.value), y=sha256(B.value);
-    oa.textContent=x;
-    ob.innerHTML = y.split('').map(function(c,i){
-      return c===x[i] ? c : '<span class="hl">'+c+'</span>';
-    }).join('');
-
-    var xb='', yb='', i;
-    for(i=0;i<64;i++){
-      xb += ('0000'+parseInt(x[i],16).toString(2)).slice(-4);
-      yb += ('0000'+parseInt(y[i],16).toString(2)).slice(-4);
-    }
-    var diff=0; bits.innerHTML='';
-    for(i=0;i<256;i++){
-      var d = xb[i]!==yb[i]; if(d) diff++;
-      var r=document.createElementNS(NS,'rect');
-      r.setAttribute('x', 4+(i%32)*19.7); r.setAttribute('y', 5+Math.floor(i/32)*10.2);
-      r.setAttribute('width',17.5); r.setAttribute('height',8);
-      r.setAttribute('fill', d ? '#D6006E' : '#E9EAE2');
-      bits.appendChild(r);
-    }
-    var pct = (diff/256*100).toFixed(1);
-    stat.textContent = diff + ' / 256 bits differ (' + pct + '%)';
-    stat.style.color = (diff>110 && diff<146) ? '#0B8A5B' : '#4A4F58';
-  }
-  A.addEventListener('input',run); B.addEventListener('input',run); run();
-})();
-</script>
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -947,7 +872,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
