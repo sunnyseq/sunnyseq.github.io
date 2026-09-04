@@ -320,7 +320,7 @@ svg{max-width:100%;height:auto;display:block}
   <header class="libhead">
     <p class="eyebrow">A working library</p>
     <h1>Field Notes</h1>
-    <p class="lede">Three courses on the systems everything else is standing on. Written in dependency order, with an interactive model in every chapter rather than a diagram of one.</p>
+    <p class="lede">A growing library of courses on the systems everything else is standing on &mdash; new courses added over time, each written in dependency order, with an interactive model in every chapter rather than a diagram of one.</p>
     <div class="libmeta">
       <span id="m-courses"></span>
       <span id="m-chapters"></span>
@@ -333,10 +333,10 @@ svg{max-width:100%;height:auto;display:block}
   <section style="margin-top:56px;max-width:62ch">
     <h2 style="margin-top:0">How these fit together</h2>
     <p style="font-size:.95rem;color:var(--ink-soft)">
-      The courses cross-reference each other where one genuinely explains another. Kubernetes resource limits point down to cgroups; pod termination points down to signal handling; kube-proxy points down to netfilter. Security points sideways into both. Follow the <span style="color:var(--server)">&#8599;</span> markers when you want the layer underneath.
+      Every course stands on its own, but real systems overlap, and the library is cross-referenced wherever one course genuinely explains a layer underneath — or beside — another. Kubernetes resource limits point down to the cgroups that enforce them; pod termination points down to signal handling; kube-proxy points down to netfilter. Security threads sideways through nearly everything. Follow the <span style="color:var(--server)">&#8599;</span> markers when you want the layer underneath, or the concern running across the one you are reading.
     </p>
     <p style="font-size:.95rem;color:var(--ink-soft)">
-      If you are starting from scratch, <strong>Under the Hood</strong> Part III is the most useful thing to read before <strong>Inside Out</strong> — namespaces and cgroups are what a container actually is, and everything Kubernetes does with pods is a consequence.
+      As the library grows, so does the map between courses — each new one arrives already wired into whatever it touches, not bolted on afterward. If you are starting from scratch today, <strong>Under the Hood</strong> Part III is still the most useful thing to read before <strong>Inside Out</strong> — namespaces and cgroups are what a container actually is, and everything Kubernetes does with pods is a consequence.
     </p>
     <p style="font-size:.86rem;color:var(--ink-soft);margin-top:26px">
       Progress is tracked separately per course and stored in this browser. Every chapter prints cleanly to PDF.
