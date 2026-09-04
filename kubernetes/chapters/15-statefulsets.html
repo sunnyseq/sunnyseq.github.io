@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>19 · Authentication and authorization — The Wire</title>
+<title>15 · StatefulSets — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,7 +313,7 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-the-wire" data-chapter="19">
+<body class="course-kubernetes" data-chapter="15">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
@@ -321,439 +321,195 @@ svg{max-width:100%;height:auto;display:block}
 <nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part V &nbsp;·&nbsp; Applied and operational &nbsp;·&nbsp; Chapter 19</p>
-  <h1>Authentication and authorization</h1>
-  <p class="lede">Two words that get used interchangeably and should never be. Authentication asks <em>who are you</em>; authorization asks <em>what may you do</em>. Systems that conflate them produce the largest vulnerability category in the OWASP list, and the confusion usually shows up as a check performed once at the door and never again.</p>
+  <p class="eyebrow">Part IV &nbsp;&middot;&nbsp; Storage and state &nbsp;&middot;&nbsp; Chapter 15</p>
+  <h1>StatefulSets</h1>
+  <p class="lede">A ReplicaSet's pods are interchangeable by design — kill one, get a stranger back. Some workloads need the opposite: the same name, the same volume, the same position in line, every time. This chapter is the controller built for exactly that.</p>
 </header>
 
 <div class="col">
 
-<h2>19.1 The distinction, and why it keeps failing</h2>
+<h2>15.1 What a Deployment genuinely cannot promise</h2>
 
-<table>
-<thead><tr><th></th><th>Authentication</th><th>Authorization</th></tr></thead>
-<tbody>
-<tr><td>Question</td><td>Who is this?</td><td>May they do this, to this object?</td></tr>
-<tr><td>When</td><td>Once, at the start</td><td><strong>Every single request</strong></td></tr>
-<tr><td>Evidence</td><td>Password, key, certificate, passkey</td><td>Roles, ownership, policy</td></tr>
-<tr><td>Failure looks like</td><td>Account takeover</td><td>Reading someone else's data</td></tr>
-</tbody>
-</table>
+<p>A Deployment's ReplicaSet (Chapter 16) treats its pods as interchangeable — kill any one of them, and its replacement gets a fresh, unrelated name and, if it's using a volume at all, whatever the pod template happens to specify, with no notion of "this replacement is standing in for that specific instance." That's exactly right for a stateless web server, and exactly wrong for a database replica that needs to rejoin a cluster as the same member it was before, with the same data, the same identity, in the same relative position.</p>
 
-<p>The classic bug is an endpoint that verifies a valid session and then trusts an identifier from the request: <code>GET /invoices/8842</code> returns invoice 8842 to anyone logged in. Authentication succeeded perfectly. Nobody asked whether <em>this</em> user owns <em>that</em> invoice. This is insecure direct object reference, and it is a one-line fix that is missing across an enormous amount of production code.</p>
+<p>A <strong>StatefulSet</strong> exists for precisely that gap. It provides three guarantees a Deployment does not: a stable, predictable name per pod that survives rescheduling, a persistent volume that follows that specific identity rather than being handed out generically, and — critically — control over the <em>order</em> pods are created, scaled and terminated in.</p>
 
-<div class="callout">
-  <span class="tag">The rule worth internalising</span>
-  <p>Authorization is a property of the tuple (subject, action, object), evaluated server-side, on every request. Not of the route. Not of the UI. Hiding a button changes what a user <em>sees</em>, never what they can <em>send</em>. If the check lives anywhere other than immediately before the action, it is decorative.</p>
+<h2>15.2 Ordinals: identity as a number, not a hash</h2>
+
+<p>Where a ReplicaSet names its pods with a random suffix (<code>web-7f9c4d8b6-x2k9p</code>), a StatefulSet named <code>db</code> with 3 replicas creates exactly <code>db-0</code>, <code>db-1</code>, <code>db-2</code> — and when <code>db-1</code> is deleted for any reason, its replacement is created as <code>db-1</code> again, not some fourth, differently-named pod. The ordinal is the identity. Nothing about which physical node it lands on, or when it was created, changes that name.</p>
+
+<pre><code>StatefulSet "db", replicas: 3
+  db-0   ordinal 0   volume: data-db-0
+  db-1   ordinal 1   volume: data-db-1
+  db-2   ordinal 2   volume: data-db-2
+
+# Delete db-1. Its replacement:
+  db-1   ordinal 1   volume: data-db-1   <- same name, same volume, rejoins as itself</code></pre>
+
+<h2>15.3 volumeClaimTemplates: a PVC that follows the ordinal, not the pod</h2>
+
+<p>A regular pod template's volume references one specific PVC, shared by every replica — clearly wrong here, since <code>db-0</code> and <code>db-1</code> must never share a data directory. A StatefulSet instead declares a <code>volumeClaimTemplate</code>: not a PVC itself, but a stamp used to create one <em>per ordinal</em>, the first time that ordinal's pod is created. <code>db-0</code> gets its own PVC (conventionally named <code>data-db-0</code>), <code>db-1</code> gets <code>data-db-1</code>, and so on — and deleting and recreating the pod at a given ordinal reuses that same PVC rather than provisioning a new one, which is what makes "the replacement rejoins with the same data" actually true rather than aspirational.</p>
+
+<div class="callout warn">
+  <span class="tag">The part that surprises people</span>
+  <p>Deleting a StatefulSet does <strong>not</strong> delete the PVCs its volumeClaimTemplates created. This is deliberate — it protects data from an accidental <code>kubectl delete statefulset</code> — but it means scaling a StatefulSet down and back up does not give you fresh volumes; ordinal 2's old data is still sitting there, still bound, waiting for a pod at that ordinal to reclaim it. Genuinely wanting a clean slate means deleting the PVCs explicitly, a separate, deliberate action.</p>
 </div>
 
-<h2>19.2 Passwords, and doing them properly</h2>
+<h2>15.4 Ordered, one at a time, and it waits for Ready</h2>
 
-<p>Chapter 3 covered the storage side: Argon2id, memory-hard, deliberately slow. The surrounding practice matters as much:</p>
-
-<ul>
-<li><strong>Length over composition.</strong> NIST SP 800-63B dropped mandatory complexity rules and forced rotation, because both push users toward predictable patterns. Require a minimum length, allow long passphrases, allow paste, and support the full Unicode range.</li>
-<li><strong>Check against breach corpora.</strong> Blocking known-compromised passwords at signup stops credential stuffing at the source. Have I Been Pwned's range API lets you do this without sending the password — you send the first five hex characters of its SHA-1 and check locally against the returned suffixes. That is <em>k</em>-anonymity applied to a lookup.</li>
-<li><strong>Rehash on login</strong> when your work factor increases, since that is the only moment you hold the plaintext.</li>
-<li><strong>Constant-time comparison</strong>, and identical timing and messaging whether or not the account exists — otherwise login becomes a user enumeration oracle (Ch. 2).</li>
-</ul>
-
-<h2>19.3 The second factor, ranked honestly</h2>
-
-<table>
-<thead><tr><th>Factor</th><th>Phishing-resistant?</th><th>Notes</th></tr></thead>
-<tbody>
-<tr><td>SMS one-time code</td><td><strong>No</strong></td><td>SIM swap, SS7 interception, and trivially relayed. Better than nothing; do not call it strong.</td></tr>
-<tr><td>TOTP app</td><td><strong>No</strong></td><td>No network dependency, but a phishing site simply asks for the code and relays it within its 30-second window.</td></tr>
-<tr><td>Push approval</td><td>No</td><td>Vulnerable to MFA fatigue — spam prompts until someone taps accept. Number matching helps.</td></tr>
-<tr><td><strong>WebAuthn / passkeys</strong></td><td><strong>Yes</strong></td><td>The signature is bound to the origin. A phishing site gets nothing usable.</td></tr>
-<tr><td>Client certificates</td><td>Yes</td><td>Same property (Ch. 16), worse ergonomics for consumers.</td></tr>
-</tbody>
-</table>
-
-<p>The dividing line is not strength but <strong>binding</strong>. Anything the user can read and retype can be relayed by a site pretending to be you. WebAuthn signs a challenge together with the origin the browser is actually on, and the browser will not sign for the wrong origin — so a credential harvested at <code>bank-secure.example</code> is worthless at <code>bank.example</code>. That is exactly the mechanism from Chapter 16, with usable enrolment and recovery bolted on.</p>
-
-<h2>19.4 Sessions versus tokens</h2>
+<p>By default, a StatefulSet creates pods in strict ascending order — <code>db-0</code> first, and it must reach Ready (Chapter 6) before <code>db-1</code> is even created, and so on. Scaling down reverses the order: the highest ordinal terminates first, and termination of one must complete before the next one down begins. This is the opposite of a ReplicaSet, which creates and destroys pods with no ordering guarantee at all, in parallel, as fast as it can.</p>
 
 <div class="demo">
-  <div class="demohead"><span>Interactive · JWT inspector</span><span id="jwtstat">—</span></div>
+  <div class="demohead"><span>Interactive · ordered rollout vs. parallel scaling</span><span id="ssstat">idle</span></div>
   <div class="demobody">
     <div class="ctl">
-      <label>Scenario</label>
-      <button class="chip on" data-jw="ok">Well-formed</button>
-      <button class="chip" data-jw="none">alg: none</button>
-      <button class="chip" data-jw="confuse">Algorithm confusion</button>
-      <button class="chip" data-jw="noexp">No expiry</button>
-      <button class="chip" data-jw="weak">Weak HMAC secret</button>
+      <label>Kind</label>
+      <button class="chip on" data-kind="sts">StatefulSet (ordered)</button>
+      <button class="chip" data-kind="rs">ReplicaSet (parallel)</button>
+      <button class="chip" id="ssgo">Scale to 3</button>
+      <button class="chip" id="ssreset">Reset</button>
     </div>
-    <div style="font:700 10px 'JetBrains Mono',monospace;letter-spacing:.14em;color:#4A4F58;margin-bottom:5px">TOKEN</div>
-    <div class="out hexdump" id="jwtraw"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
-      <div>
-        <div style="font:700 10px 'JetBrains Mono',monospace;letter-spacing:.14em;color:#4A4F58;margin-bottom:5px">HEADER</div>
-        <div class="out" id="jwthdr" style="font-size:11.5px"></div>
-      </div>
-      <div>
-        <div style="font:700 10px 'JetBrains Mono',monospace;letter-spacing:.14em;color:#4A4F58;margin-bottom:5px">PAYLOAD</div>
-        <div class="out" id="jwtpay" style="font-size:11.5px"></div>
-      </div>
-    </div>
-    <div class="out" id="jwtout" style="margin-top:14px;background:#fff"></div>
+    <div class="out" id="sslog" style="max-height:200px;overflow-y:auto">Choose a kind and scale to 3 to watch the difference.</div>
   </div>
-  <div class="demonote">A JWT is signed, not encrypted. Anyone holding one can read every claim inside it — never put anything in a payload you would not print on a postcard.</div>
+  <div class="demonote">Watch the timestamps: the StatefulSet strictly serializes on Ready, one pod's full readiness gating the next pod's creation. The ReplicaSet fires all three creations in the same instant, with no ordering relationship between them at all.</div>
 </div>
 
-<table>
-<thead><tr><th></th><th>Server-side sessions</th><th>Self-contained tokens (JWT)</th></tr></thead>
-<tbody>
-<tr><td>State</td><td>In your store; the cookie is an opaque handle</td><td>In the token itself</td></tr>
-<tr><td>Revocation</td><td><strong>Immediate</strong> — delete the record</td><td><strong>Hard</strong> — valid until expiry unless you build a denylist</td></tr>
-<tr><td>Scaling</td><td>Needs a shared store</td><td>Stateless verification</td></tr>
-<tr><td>Size</td><td>Tiny</td><td>Hundreds of bytes on every request</td></tr>
-<tr><td>Best for</td><td>Ordinary web applications</td><td>Short-lived service-to-service credentials</td></tr>
-</tbody>
-</table>
+<script>
+(function(){
+  var kind = 'sts';
+  var log = document.getElementById('sslog');
+  var stat = document.getElementById('ssstat');
+  document.querySelectorAll('[data-kind]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('[data-kind]').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on');
+      kind = b.dataset.kind;
+    });
+  });
+  function line(t){ var d=document.createElement('div'); d.innerHTML=t; log.insertBefore(d, log.firstChild); }
+  document.getElementById('ssgo').addEventListener('click', function(){
+    log.innerHTML = '';
+    stat.textContent = 'scaling...';
+    if (kind === 'sts') {
+      var steps = [];
+      var t = 0;
+      [0,1,2].forEach(function(i){
+        steps.push({delay: t, text: 'creating <strong>db-' + i + '</strong>, volume data-db-' + i + ' provisioned'});
+        t += 300;
+        steps.push({delay: t, text: '<strong>db-' + i + '</strong> passes readiness &mdash; only now does db-' + (i+1) + ' begin', last: i===2});
+        t += 250;
+      });
+      steps.forEach(function(s){
+        setTimeout(function(){
+          line('t+' + s.delay + 'ms &middot; ' + s.text);
+          if (s.last) stat.textContent = 'all 3 ready, in order';
+        }, s.delay);
+      });
+    } else {
+      line('t+0ms &middot; creating <strong>web-a1b2c</strong>, <strong>web-d4e5f</strong>, <strong>web-g6h7i</strong> &mdash; all three at once, no ordering, no shared identity across restarts');
+      setTimeout(function(){ line('t+280ms &middot; all three pass readiness independently, in whatever order they happen to finish', '#0B8A5B'); stat.textContent = 'all 3 ready, unordered'; }, 300);
+    }
+  });
+  document.getElementById('ssreset').addEventListener('click', function(){ log.innerHTML=''; stat.textContent='idle'; });
+})();
+</script>
 
-<p>The revocation row decides most cases. If a user changes their password or an admin disables an account, a session dies instantly and a JWT does not. The usual answer — short access tokens plus a refresh token — is really an admission that you need server state after all, since the refresh token has to be revocable. <strong>For a normal web application, boring server-side sessions are usually the right choice</strong>, and JWTs are frequently adopted for statelessness that the architecture does not actually require.</p>
+<h2>15.5 The headless Service underneath: identity you can actually address</h2>
 
-<h2>19.5 OAuth 2.0 and OpenID Connect</h2>
+<p>A StatefulSet is always paired with a headless Service (Chapter 11 — <code>clusterIP: None</code>), and this is not incidental plumbing. Because DNS for a headless Service resolves to individual pod IPs rather than one load-balanced address, and because each StatefulSet pod's hostname is set to its ordinal name, every replica gets its own stable, individually addressable DNS name: <code>db-0.db.default.svc.cluster.local</code> always resolves to whichever pod currently holds the <code>db-0</code> identity, not to "some replica, load-balanced." That is what lets a client — or the replicas themselves — talk to a <em>specific</em> member, which is the entire point for anything doing peer discovery, primary election, or ordered replication.</p>
 
-<p>The distinction people get wrong: <strong>OAuth is a delegated authorization protocol, not an authentication protocol.</strong> It answers "may this application access that resource on the user's behalf?" OIDC is a thin layer on top that adds authentication properly, via an ID token with defined claims and validation rules. Using raw OAuth to log people in is a well-documented source of bugs.</p>
-
-<div class="demo">
-  <div class="demohead"><span>Interactive · authorization code flow with PKCE</span><span id="oastat">Step 0 of 7</span></div>
-  <div class="demobody">
-    <div class="ctl">
-      <button class="chip" id="oanext">Next step</button>
-      <button class="chip" id="oareset">Reset</button>
-      <label style="margin-left:12px">Attacker</label>
-      <button class="chip" id="oaatk" aria-pressed="false">Intercepts the code</button>
-    </div>
-    <svg viewBox="0 0 700 250" role="img" aria-label="OAuth authorization code flow with PKCE">
-      <defs><style>
-        .ob{fill:#fff;stroke:#DCDDD4;stroke-width:1.5}
-        .ob.act{stroke:#1B4FD8;stroke-width:3;fill:#F4F7FF}
-        .oln{font:700 10.5px 'Space Grotesk',sans-serif;text-anchor:middle;fill:#14161A}
-        .osb{font:400 8.5px 'JetBrains Mono',monospace;text-anchor:middle;fill:#4A4F58}
-        .omsg{font:400 9px 'JetBrains Mono',monospace;text-anchor:middle}
-      </style>
-      <marker id="oa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
-      <g id="oag"></g>
-    </svg>
-    <div class="out" id="oaout" style="margin-top:14px"></div>
-  </div>
-  <div class="demonote">PKCE was designed for mobile apps that cannot keep a client secret, and is now recommended for every client type including server-side web apps. It costs one hash and closes an entire attack class.</div>
-</div>
-
-<h3>Flows you should not use</h3>
-<ul>
-<li><strong>Implicit flow</strong> — returns the access token directly in the URL fragment, where it lands in browser history, referrer headers and logs. Deprecated; use authorization code with PKCE.</li>
-<li><strong>Resource owner password credentials</strong> — the application collects the user's password for the identity provider. Defeats the entire purpose of delegation, and is incompatible with MFA and passkeys.</li>
-</ul>
-
-<h2>19.6 Authorization models</h2>
-
-<ul>
-<li><strong>RBAC</strong> — permissions attach to roles, users get roles. Simple, auditable, and it degrades into role explosion when rules depend on context.</li>
-<li><strong>ABAC</strong> — decisions are computed from attributes of subject, object, action and environment. Expressive, and harder to reason about or audit.</li>
-<li><strong>ReBAC</strong> — permission follows a relationship graph: you may edit this document because you own the folder that contains it. This is Google's Zanzibar model, and it fits the ownership-and-sharing shape most applications actually have.</li>
-</ul>
-
-<p>Whichever you choose, two implementation rules matter more than the model. <strong>Deny by default</strong> — an unmatched request is refused, so a forgotten rule fails closed (Ch. 1). And <strong>decide centrally, enforce locally</strong> — a policy engine keeps rules consistent and reviewable, but the enforcement point must sit immediately before the action, never at the edge on the assumption that internal callers are trustworthy (Ch. 1's TB-2, Ch. 16).</p>
-
-<h2>19.7 Lab</h2>
+<h2>15.6 Lab · watch ordinals, PVCs and per-pod DNS hold together</h2>
 
 <div class="lab">
-  <div class="labhead"><span>Shell · tokens, hashes and flows</span><button data-copy>Copy</button></div>
-<pre><code># Decode a JWT without any library \u2014 note you need no key to READ it
-T='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0IiwiZXhwIjoxNzAwMDAwMDAwfQ.sig'
-for part in 1 2; do
-  echo "$T" | cut -d. -f$part | tr '_-' '/+' | base64 -d 2>/dev/null | python3 -m json.tool
-done
-#   Signed, not encrypted. Never put secrets in a payload.
+  <div class="labhead"><span>Shell · stable identity, made concrete</span><button data-copy>Copy</button></div>
+<pre><code># Ordinal-named pods, in order
+kubectl get pods -l app=db -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName
 
-# Check a password against breach corpora WITHOUT sending it (k-anonymity)
-P='correct horse battery staple'
-H=$(printf '%s' "$P" | sha1sum | cut -d' ' -f1 | tr 'a-z' 'A-Z')
-curl -s "https://api.pwnedpasswords.com/range/${H:0:5}" | grep -i "${H:5}" \
-  && echo "BREACHED \u2014 reject at signup" || echo "not found in corpus"
-#   Only the first 5 hex characters leave your machine.
+# The PVC created per ordinal - note the naming convention
+kubectl get pvc -l app=db
+#   data-db-0   Bound   ...
+#   data-db-1   Bound   ...
 
-# Password hashing with sane parameters, and how long one verify costs
-time python3 -c "
-import argon2
-h = argon2.PasswordHasher(memory_cost=65536, time_cost=3, parallelism=4)
-d = h.hash('correct horse battery staple')
-print(d)
-print('verify:', h.verify(d, 'correct horse battery staple'))"
+# Prove the PVC survives a pod's deletion and is reused, not recreated
+kubectl delete pod db-1
+kubectl get pvc data-db-1 -o jsonpath='{.metadata.uid}'   # compare before/after - unchanged
 
-# Generate a PKCE pair the way a client would
-VERIFIER=$(openssl rand -base64 96 | tr -d '\n=+/' | cut -c1-64)
-CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
-echo "code_verifier : $VERIFIER"
-echo "code_challenge: $CHALLENGE"
-#   The challenge goes in the authorization request; the verifier is only
-#   revealed at the token exchange. An intercepted code is useless without it.
+# Prove deleting the whole StatefulSet doesn't touch the PVCs
+kubectl delete statefulset db
+kubectl get pvc -l app=db   # still there, still Bound
 
-# An identity provider's OIDC configuration \u2014 every field it advertises
-curl -s https://accounts.google.com/.well-known/openid-configuration | python3 -m json.tool | head -30
+# Per-pod DNS - a specific replica, not a load-balanced pick
+kubectl exec -it debug-pod -- nslookup db-0.db.default.svc.cluster.local
+kubectl exec -it debug-pod -- nslookup db-1.db.default.svc.cluster.local
 
-# The signing keys used to verify ID tokens
-curl -s https://www.googleapis.com/oauth2/v3/certs | python3 -m json.tool | head -20
-
-# Session cookie hygiene on your own app (Ch. 18)
-curl -sSI https://your-app.example/login | grep -i set-cookie
-
-# User enumeration: do wrong-password and wrong-username behave identically?
-for u in realuser@example.com definitely-not-a-user@example.com; do
-  printf '%-40s ' "$u"
-  curl -s -o /dev/null -w '%{http_code}  %{time_total}s\n' \
-    -d "username=$u&password=wrong" https://your-app.example/login
-done
-#   Different status codes or noticeably different timings = an enumeration oracle.</code></pre>
+# Watch ordered rollout for yourself
+kubectl scale statefulset db --replicas=5
+kubectl get pods -l app=db -w   # db-3 Running/Ready before db-4 even appears</code></pre>
 </div>
 
 <div class="quiz">
   <h3>Knowledge check</h3>
 
-  <div class="q" data-answer="2">
-    <p class="qtext">An endpoint checks that the request has a valid session, then returns the record whose ID is in the URL. What is wrong?</p>
+  <div class="q" data-answer="1">
+    <p class="qtext">A StatefulSet's pod db-1 is deleted (not the whole StatefulSet). What identity does its replacement get?</p>
     <div class="opts">
-      <button class="opt">Nothing — the session proves identity</button>
-      <button class="opt">The ID should be encrypted</button>
-      <button class="opt">Authentication was checked but authorization was not — nobody verified this user may access that object</button>
-      <button class="opt">The session should be a JWT</button>
+      <button class="opt">A new random name, like a ReplicaSet would generate</button>
+      <button class="opt">db-1 again — the same ordinal, the same PVC, the same per-pod DNS name</button>
+      <button class="opt">db-3, the next available ordinal after the current highest</button>
+      <button class="opt">It is not replaced automatically; StatefulSets require manual pod recreation</button>
     </div>
-    <p class="why">Insecure direct object reference, and consistently the largest OWASP category. Authorization is a property of (subject, action, object) and must be evaluated per request against the specific object. Making IDs unguessable is obfuscation, not a control.</p>
+    <p class="why">The ordinal is the pod's stable identity, maintained by the StatefulSet controller regardless of why a given pod disappeared. The replacement is created specifically to fill the db-1 slot again, reusing the same volumeClaimTemplate-derived PVC and the same DNS name — that continuity is the entire feature.</p>
   </div>
 
-  <div class="q" data-answer="1">
-    <p class="qtext">Why is TOTP not phishing-resistant while WebAuthn is?</p>
+  <div class="q" data-answer="2">
+    <p class="qtext">A StatefulSet with 3 replicas is deleted entirely with kubectl delete statefulset. What happens to its PVCs?</p>
     <div class="opts">
-      <button class="opt">TOTP codes are too short</button>
-      <button class="opt">A user can read and retype a TOTP code, so a phishing site relays it — WebAuthn signs the actual origin, and the browser will not sign for the wrong one</button>
-      <button class="opt">TOTP uses a weaker hash</button>
-      <button class="opt">WebAuthn codes change more frequently</button>
+      <button class="opt">They are deleted immediately along with the StatefulSet</button>
+      <button class="opt">They are deleted only if reclaimPolicy is set to Delete</button>
+      <button class="opt">They are left exactly as they were — Bound, untouched — deliberately, to protect data from an accidental deletion of the StatefulSet object itself</button>
+      <button class="opt">They are automatically merged into a single combined volume</button>
     </div>
-    <p class="why">The property is binding, not strength. Anything a human can transcribe can be relayed within its validity window. WebAuthn includes the origin in the signed data and the browser enforces it, so a credential harvested on a lookalike domain is worthless on the real one — the same mechanism as mTLS in Chapter 16.</p>
+    <p class="why">This is a deliberate safety property, not an oversight: volumeClaimTemplate-created PVCs outlive the StatefulSet that created them. Recreating the StatefulSet with the same name reunites each ordinal with its original PVC — reclaiming the data is possible precisely because nothing deleted it in the first place.</p>
   </div>
 
   <div class="q" data-answer="0">
-    <p class="qtext">What does PKCE protect against?</p>
+    <p class="qtext">A StatefulSet is scaled from 1 to 3 replicas. What is true about the creation of db-1 and db-2?</p>
     <div class="opts">
-      <button class="opt">An attacker who intercepts the authorization code redeeming it, since they lack the code_verifier</button>
-      <button class="opt">Brute-forcing the client secret</button>
-      <button class="opt">Tokens leaking in browser history</button>
-      <button class="opt">Replay of the ID token</button>
+      <button class="opt">db-1 must reach Ready before db-2 is even created — strictly ordered, one at a time, unlike a ReplicaSet's parallel creation</button>
+      <button class="opt">Both are created simultaneously, exactly like a ReplicaSet scaling up</button>
+      <button class="opt">db-2 is created first because higher ordinals are prioritized</button>
+      <button class="opt">The order depends on which node has more available resources</button>
     </div>
-    <p class="why">The client commits to a secret verifier by sending its hash up front, then reveals the verifier only at the token exchange. A code stolen from a redirect — a malicious app registered for the same URI scheme, a logged URL, a referrer leak — cannot be redeemed. Originally for mobile clients; now recommended for all of them.</p>
+    <p class="why">Ordered, sequential rollout — gated on readiness, not just creation — is one of the three core guarantees a StatefulSet adds over a ReplicaSet. This matters concretely for anything where a later replica's startup depends on an earlier one already being a healthy, joinable cluster member.</p>
   </div>
 
   <div class="q" data-answer="3">
-    <p class="qtext">A team chose JWTs so their API could scale statelessly. Which problem should they plan for?</p>
+    <p class="qtext">Why is a StatefulSet always paired with a headless Service rather than a normal ClusterIP Service?</p>
     <div class="opts">
-      <button class="opt">JWTs cannot carry custom claims</button>
-      <button class="opt">JWTs cannot be used over HTTP/2</button>
-      <button class="opt">JWTs are encrypted, so debugging is hard</button>
-      <button class="opt">Revocation — a token stays valid until it expires unless they build the server-side denylist statelessness was meant to avoid</button>
+      <button class="opt">Headless Services provide better load-balancing performance for stateful workloads</button>
+      <button class="opt">A normal Service does not support persistent volumes</button>
+      <button class="opt">It's purely a naming convention with no functional difference</button>
+      <button class="opt">A headless Service's DNS resolves to individual pod IPs rather than one load-balanced address, giving each ordinal-named pod its own stable, individually addressable DNS name — needed for peer discovery and ordered replication between specific members</button>
     </div>
-    <p class="why">Password changes, account suspension and stolen tokens all need immediate effect, and a self-contained token gives none. Short expiry plus a revocable refresh token is the standard answer, and it reintroduces server state — which is worth noticing before choosing the architecture. JWTs are signed, not encrypted, so anyone holding one can read it.</p>
+    <p class="why">The whole value of ordinal identity would be lost if clients could only ever reach "some replica" through a load-balanced ClusterIP. A headless Service is what turns "db-1 exists as a stable identity" into "db-1.db.default.svc.cluster.local reliably reaches that specific pod," which is what peer-aware, ordered systems actually need.</p>
   </div>
 </div>
 
-<h2>19.8 Carry forward</h2>
+<h2>15.7 What to carry into Chapter 16</h2>
 <ul>
-<li>Authentication happens once; authorization happens on every request, against the specific object.</li>
-<li>Length beats complexity, and check passwords against breach corpora at signup.</li>
-<li>Phishing resistance comes from origin binding, not from factor strength.</li>
-<li>Sessions revoke instantly; JWTs do not. Choose on that, not on fashion.</li>
-<li>OAuth authorizes; OIDC authenticates. Use authorization code with PKCE, always.</li>
-<li>Deny by default, decide centrally, enforce locally.</li>
+<li>A StatefulSet adds exactly what a Deployment doesn't need and doesn't provide: stable per-ordinal identity, a persistent volume that follows that identity, and strict creation/termination ordering.</li>
+<li>volumeClaimTemplates stamp out one PVC per ordinal on first creation, then reuse it — a pod's replacement reclaims its predecessor's data, not a fresh volume.</li>
+<li>Deleting a StatefulSet does not delete its PVCs, by design — a safety property, not a gap.</li>
+<li>A paired headless Service is what makes ordinal identity actually reachable, via stable per-pod DNS names rather than a load-balanced pick.</li>
 </ul>
+
+<p>Part IV ends here, with data that survives its pod. Part V turns to the workload controllers themselves — starting with the one behind almost every stateless application on a real cluster, and the mechanics of rolling out a change to it without downtime.</p>
 
 <div class="donebar"></div>
 <nav class="chapfoot"></nav>
 </div>
 </main>
 </div>
-
-<script>
-/* ---------- JWT inspector ---------- */
-(function(){
-  function b64(o){ return btoa(JSON.stringify(o)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
-
-  var J = {
-    ok:{ h:{alg:'RS256',typ:'JWT',kid:'2026-05'},
-         p:{iss:'https://idp.example',sub:'user-8842',aud:'api.example',exp:1785000000,iat:1784996400,scope:'invoices:read'},
-         sig:'mF9cQ2...verified', stat:'valid',
-         out:'<span style="color:#0B8A5B"><strong>Well-formed.</strong></span> Asymmetric signature, so the API verifies with a public key it fetches from the issuer\u2019s JWKS endpoint and never holds a signing secret. Every claim a verifier must check is present:<br><br>' +
-             '<code>iss</code> the expected issuer \u00B7 <code>aud</code> <strong>this</strong> API, so a token minted for another service is rejected \u00B7 <code>exp</code> a short lifetime \u00B7 <code>kid</code> which key signed it.<br><br>' +
-             'Note the payload is readable right there in the panel above. A JWT is <em>signed, not encrypted</em> \u2014 anyone holding one reads every claim. Nothing sensitive belongs in it.'},
-    none:{ h:{alg:'none',typ:'JWT'},
-         p:{iss:'https://idp.example',sub:'admin',aud:'api.example',exp:1785000000,role:'superuser'},
-         sig:'(empty)', stat:'FORGED',
-         out:'<span style="color:#C1121F"><strong>The alg:none attack.</strong></span> The JWT specification permits an "unsecured" token with no signature at all, and several early libraries honoured it \u2014 accepting <code>alg: none</code> as a valid algorithm and skipping verification entirely.<br><br>' +
-             'An attacker takes any token, rewrites the payload to <code>sub: admin</code>, sets <code>alg</code> to <code>none</code>, drops the signature, and is an administrator.<br><br>' +
-             '<span style="color:#0B8A5B">The fix:</span> never let the token tell you how to verify it. Pin the expected algorithm in your verifier configuration and reject anything else. The <code>alg</code> header is attacker-controlled input, which is exactly the mistake Chapter 9 flagged with the duplicated signatureAlgorithm field in X.509.'},
-    confuse:{ h:{alg:'HS256',typ:'JWT',kid:'2026-05'},
-         p:{iss:'https://idp.example',sub:'admin',aud:'api.example',exp:1785000000,role:'superuser'},
-         sig:'HMAC(publicKey, ...)', stat:'FORGED',
-         out:'<span style="color:#C1121F"><strong>Algorithm confusion.</strong></span> Subtler and more dangerous than <code>alg:none</code>. The genuine token was signed RS256, verified with the issuer\u2019s <em>public</em> key \u2014 which is, by definition, public.<br><br>' +
-             'The attacker changes <code>alg</code> to <code>HS256</code> and computes an HMAC over the forged payload <strong>using that public key as the HMAC secret</strong>. A naive verifier reads <code>alg: HS256</code>, fetches "the key" for this issuer, and does an HMAC check with the same public key \u2014 which passes.<br><br>' +
-             'The root cause is a verifier that selects its algorithm from the token instead of from its own policy. Again: pin the algorithm, and keep verification keys typed so an RSA public key can never be used as an HMAC secret.'},
-    noexp:{ h:{alg:'RS256',typ:'JWT',kid:'2026-05'},
-         p:{iss:'https://idp.example',sub:'user-8842',aud:'api.example',scope:'invoices:read admin:write'},
-         sig:'mF9cQ2...verified', stat:'valid forever',
-         out:'<span style="color:#E8A317"><strong>No <code>exp</code> claim.</strong></span> The signature is perfectly valid, and the token never stops being valid. This is Chapter 2\u2019s freshness problem in a new costume: authenticity without any binding to a moment in time.<br><br>' +
-             'A token in a log file, an error report, a browser extension or a repository commit remains usable indefinitely. There is no revocation \u2014 that is the price of statelessness \u2014 so expiry is the only thing bounding the damage, exactly as short certificate lifetimes are the real answer to revocation in Chapter 11.<br><br>' +
-             '<span style="color:#0B8A5B">The fix:</span> short <code>exp</code> on access tokens (minutes), a revocable refresh token for longevity, and a verifier that <em>rejects</em> a token with no <code>exp</code> rather than treating the absence as "no constraint".'},
-    weak:{ h:{alg:'HS256',typ:'JWT'},
-         p:{iss:'https://idp.example',sub:'user-8842',aud:'api.example',exp:1785000000},
-         sig:'HMAC("secret", ...)', stat:'crackable',
-         out:'<span style="color:#C1121F"><strong>Symmetric signing with a guessable secret.</strong></span> HS256 is HMAC-SHA-256 \u2014 sound in itself (Ch. 3) \u2014 and its security is entirely the secret\u2019s. Tokens are handed to clients, so an attacker has unlimited offline attempts: run a wordlist against the token until the HMAC matches, then mint any token they like.<br><br>' +
-             'Secrets like <code>secret</code>, <code>changeme</code> and a framework default fall in seconds. Tools for exactly this are a standard part of any test kit.<br><br>' +
-             '<span style="color:#0B8A5B">The fix:</span> prefer asymmetric signing (RS256, ES256, EdDSA) so the verifier holds only a public key and there is no shared secret to leak. If you must use HMAC, the key should be 256 bits from a CSPRNG and stored like any other high-value key (Ch. 21).'}
-  };
-
-  var cur='ok';
-  function render(){
-    var j=J[cur];
-    var h=b64(j.h), p=b64(j.p);
-    var bad = j.stat!=='valid';
-    document.getElementById('jwtraw').innerHTML =
-      '<span style="color:#D6006E">'+h+'</span>.<span style="color:#1B4FD8">'+p+'</span>.<span style="color:#0B8A5B">'+
-      (cur==='none'?'':j.sig.slice(0,16))+'</span>';
-    document.getElementById('jwthdr').innerHTML =
-      Object.keys(j.h).map(function(k){
-        var hot = (k==='alg' && (cur==='none'||cur==='confuse'||cur==='weak'));
-        return '<span style="color:'+(hot?'#C1121F':'#4A4F58')+'">'+k+'</span>: '+
-               '<span'+(hot?' style="background:#FFF0A8;font-weight:700"':'')+'>'+j.h[k]+'</span>';
-      }).join('<br>');
-    document.getElementById('jwtpay').innerHTML =
-      Object.keys(j.p).map(function(k){
-        var hot = (k==='sub' && (cur==='none'||cur==='confuse'));
-        return '<span style="color:#4A4F58">'+k+'</span>: '+
-               '<span'+(hot?' style="background:#FFF0A8;font-weight:700"':'')+'>'+j.p[k]+'</span>';
-      }).join('<br>') + (cur==='noexp' ? '<br><span style="color:#C1121F">exp: (absent)</span>' : '');
-    document.getElementById('jwtstat').textContent = j.stat;
-    document.getElementById('jwtstat').style.color = bad ? '#C1121F' : '#0B8A5B';
-    document.getElementById('jwtout').innerHTML = j.out;
-    document.getElementById('jwtout').style.borderLeft = '3px solid '+(bad?'#C1121F':'#0B8A5B');
-  }
-  document.querySelectorAll('[data-jw]').forEach(function(b){
-    b.addEventListener('click',function(){
-      cur=b.dataset.jw;
-      document.querySelectorAll('[data-jw]').forEach(function(x){x.classList.toggle('on',x===b);});
-      render();
-    });
-  });
-  render();
-})();
-
-/* ---------- OAuth flow ---------- */
-(function(){
-  var NS='http://www.w3.org/2000/svg', step=0, atk=false;
-
-  var S = [
-    { act:['app'], arrows:[],
-      title:'Client generates a PKCE pair',
-      body:'Before anything leaves the device, the application generates a random <code>code_verifier</code> and computes <code>code_challenge = BASE64URL(SHA-256(verifier))</code>.<br><br>It will send only the <em>challenge</em> now, and reveal the <em>verifier</em> at the very end. This is a commitment: it proves at redemption time that whoever is redeeming the code is the same party that started the flow.' },
-    { act:['app','user'], arrows:[['app','user','redirect to the authorization server']],
-      title:'Redirect to the authorization server',
-      body:'The user\u2019s browser is sent to the identity provider with <code>client_id</code>, <code>redirect_uri</code>, <code>scope</code>, <code>state</code> and the <code>code_challenge</code>.<br><br><code>state</code> is a random value the client remembers and checks on return \u2014 it is the CSRF defence for this flow (Ch. 18). Without it, an attacker can trick a victim\u2019s browser into completing a flow that links the attacker\u2019s account to the victim\u2019s session.' },
-    { act:['user','idp'], arrows:[['user','idp','authenticate + consent']],
-      title:'User authenticates at the provider',
-      body:'The user proves who they are <em>to the identity provider</em>, ideally with a passkey (\u00A719.3), and consents to the requested scopes.<br><br><span style="color:#0B8A5B">This is the point of the whole protocol:</span> the credential is never shown to the client application. The application never sees a password, never sees a second factor, and cannot leak either. That is why the resource-owner-password flow is deprecated \u2014 it throws away exactly this property.' },
-    { act:['idp','user'], arrows:[['idp','user','redirect back with code + state']],
-      title:'Authorization code returned',
-      body:'The provider redirects the browser back to the registered <code>redirect_uri</code> with a short-lived, single-use authorization code.<br><br>The code is deliberately <em>not</em> the token. It travels through the browser \u2014 in a URL, where it can end up in history, logs and referrer headers \u2014 so it is designed to be nearly useless on its own. The implicit flow returned the access token here instead, which is precisely why it was deprecated.' },
-    { act:['user','app'], arrows:[['user','app','code']],
-      title:'Client receives the code',
-      body:'The application checks that the returned <code>state</code> matches what it stored. A mismatch means this response belongs to a flow it did not start, and it must be discarded.' },
-    { act:['app','idp'], arrows:[['app','idp','code + code_verifier (+ client secret)']],
-      title:'Token exchange \u2014 back channel',
-      body:'The application calls the token endpoint <strong>directly</strong>, server to server, over TLS. No browser involved, nothing in a URL bar. It sends the code and now reveals the <code>code_verifier</code>.<br><br>The provider hashes the verifier and compares it against the challenge it stored in step 2. A match proves this is the same party that began the flow.' },
-    { act:['idp','app'], arrows:[['idp','app','access token + ID token + refresh token']],
-      title:'Tokens issued',
-      body:'The provider returns an <strong>access token</strong> (authorization \u2014 what the app may do), an <strong>ID token</strong> (authentication \u2014 who the user is, OIDC only) and usually a <strong>refresh token</strong>.<br><br>The client must validate the ID token properly: signature against the provider\u2019s JWKS, <code>iss</code>, <code>aud</code> matching its own client_id, <code>exp</code>, and the <code>nonce</code> it sent. Skipping any of these is a well-trodden bug \u2014 and note the access token is <em>not</em> proof of identity, which is the core error in using bare OAuth for login.' }
-  ];
-
-  function draw(){
-    var g=document.getElementById('oag'); g.innerHTML='';
-    var P = { app:[30,'CLIENT APP','your service'], user:[265,'BROWSER','the user'], idp:[500,'PROVIDER','identity server'] };
-    var s = step>0 ? S[step-1] : null;
-
-    Object.keys(P).forEach(function(k){
-      var p=P[k];
-      var r=document.createElementNS(NS,'rect');
-      r.setAttribute('class','ob'+(s && s.act.indexOf(k)>-1?' act':''));
-      r.setAttribute('x',p[0]);r.setAttribute('y',30);r.setAttribute('width',170);r.setAttribute('height',48);r.setAttribute('rx',3);
-      g.appendChild(r);
-      var t=document.createElementNS(NS,'text');
-      t.setAttribute('class','oln');t.setAttribute('x',p[0]+85);t.setAttribute('y',52);t.textContent=p[1];
-      g.appendChild(t);
-      var u=document.createElementNS(NS,'text');
-      u.setAttribute('class','osb');u.setAttribute('x',p[0]+85);u.setAttribute('y',68);u.textContent=p[2];
-      g.appendChild(u);
-    });
-
-    if(s){
-      s.arrows.forEach(function(a,i){
-        var x1=P[a[0]][0]+85, x2=P[a[1]][0]+85, y=110+i*30;
-        var dir = x2>x1 ? 1 : -1;
-        var l=document.createElementNS(NS,'line');
-        l.setAttribute('x1',x1+dir*88);l.setAttribute('y1',y);l.setAttribute('x2',x2-dir*88);l.setAttribute('y2',y);
-        l.setAttribute('stroke','#1B4FD8');l.setAttribute('stroke-width','2');
-        l.setAttribute('marker-end','url(#oa)');l.setAttribute('color','#1B4FD8');
-        g.appendChild(l);
-        var t=document.createElementNS(NS,'text');
-        t.setAttribute('class','omsg');t.setAttribute('x',(x1+x2)/2);t.setAttribute('y',y-7);
-        t.setAttribute('fill','#1B4FD8');t.textContent=a[2];
-        g.appendChild(t);
-      });
-    }
-
-    var out;
-    if(step===0){
-      out='Press <em>Next step</em> to walk the authorization code flow with PKCE \u2014 the flow you should use for every client type. Turn on the attacker at any point to see what an intercepted code is worth.';
-    } else {
-      out='<strong>Step '+step+' \u2014 '+s.title+'</strong><br><br>'+s.body;
-    }
-
-    if(atk && step>=4){
-      var y=200;
-      var r=document.createElementNS(NS,'rect');
-      r.setAttribute('x',230);r.setAttribute('y',y-18);r.setAttribute('width',240);r.setAttribute('height',34);
-      r.setAttribute('rx',3);r.setAttribute('fill','#FBEAEA');r.setAttribute('stroke','#C1121F');r.setAttribute('stroke-width','2');
-      g.appendChild(r);
-      var t=document.createElementNS(NS,'text');
-      t.setAttribute('class','oln');t.setAttribute('x',350);t.setAttribute('y',y+4);
-      t.setAttribute('fill','#C1121F');t.textContent='ATTACKER HAS THE CODE';
-      g.appendChild(t);
-
-      out += '<br><br><span style="color:#0B8A5B"><strong>Attacker holds the authorization code \u2014 and it is worthless.</strong></span> ' +
-        'Codes leak in genuinely common ways: a malicious app registered for the same custom URI scheme on mobile, an open redirect on the client, a referrer header, a proxy log, browser history.<br><br>' +
-        'Redeeming it requires the <code>code_verifier</code>, which never left the legitimate client and cannot be derived from the challenge \u2014 that would mean inverting SHA-256 (Ch. 3). The token endpoint hashes what it is given, compares against the stored challenge, and refuses.<br><br>' +
-        '<span style="color:#4A4F58">Without PKCE, a public client has no secret at all, and an intercepted code is immediately redeemable for tokens. That is the entire reason PKCE exists, and why it is now recommended even for confidential clients that do hold a secret.</span>';
-    }
-
-    document.getElementById('oastat').textContent='Step '+step+' of 7';
-    document.getElementById('oaout').innerHTML=out;
-  }
-
-  document.getElementById('oanext').addEventListener('click',function(){ step=Math.min(7,step+1); draw(); });
-  document.getElementById('oareset').addEventListener('click',function(){ step=0; draw(); });
-  document.getElementById('oaatk').addEventListener('click',function(){
-    atk=!atk; this.setAttribute('aria-pressed',atk); this.classList.toggle('on',atk);
-    this.textContent = atk ? 'Attacker active' : 'Intercepts the code';
-    if(atk && step<4){ step=4; }
-    draw();
-  });
-  draw();
-})();
-</script>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -1183,7 +939,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
