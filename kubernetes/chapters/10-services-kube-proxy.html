@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>18 · Web application security — The Wire</title>
+<title>10 · Services and kube-proxy — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -300,7 +300,7 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-the-wire" data-chapter="18">
+<body class="course-kubernetes" data-chapter="10">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
@@ -308,339 +308,199 @@ svg{max-width:100%;height:auto;display:block}
 <nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part V &nbsp;·&nbsp; Applied and operational &nbsp;·&nbsp; Chapter 18</p>
-  <h1>Web application security</h1>
-  <p class="lede">TLS delivers bytes intact from one endpoint to another. It has nothing to say about whether those bytes should have been sent, or what the receiving application does with them. Almost every breach you have read about happened above the transport layer, on a connection with a perfectly valid padlock.</p>
+  <p class="eyebrow">Part III &nbsp;&middot;&nbsp; Networking &nbsp;&middot;&nbsp; Chapter 10</p>
+  <h1>Services and kube-proxy</h1>
+  <p class="lede">A ClusterIP answers to nothing — no process binds it, no interface owns it. It is a fiction, maintained by rewrite rules a controller keeps current. This chapter is that fiction, and exactly where it starts and stops holding up.</p>
 </header>
 
 <div class="col">
 
-<h2>18.1 One idea underneath most of it</h2>
+<h2>10.1 An address that answers even though nothing is listening there</h2>
 
-<p>Chapter 1 defined a trust boundary as any line across which data changes trust level. Nearly every vulnerability in this chapter is the same failure: <strong>attacker-controlled data crossing a boundary and being interpreted rather than treated as inert.</strong></p>
+<p>A Service's ClusterIP is, deliberately, not a real destination. No process anywhere binds a socket to it, no network interface owns it, and no pod's routing table has a special case for it. It is a fiction, maintained entirely by rules — packet-rewriting rules, installed on every node, that intercept traffic addressed to that IP and redirect it to one of a live, changing set of real pod IPs before the packet ever leaves the node that sent it.</p>
+
+<p>This is worth sitting with because it explains behaviour that otherwise looks magical. A ClusterIP responds to nothing — <code>ping</code> it and most CNI setups get no reply, because ICMP has no port for the rewrite rules to key on. Yet a TCP connection to the exact same address works perfectly, because the rewrite happens before the packet is routed, using the destination port to find the rule, and the connection completes against whichever real pod IP got substituted in. The ClusterIP was never really the destination — it was a lookup key.</p>
+
+<h2>10.2 The component that writes the rules: kube-proxy</h2>
+
+<p><strong>kube-proxy</strong> runs on every node as a controller in exactly the Chapter 4 sense — it watches Service and EndpointSlice objects and, on every change, rewrites the local packet-handling rules to match. It does not sit in the data path itself; once the rules are installed, every packet is handled entirely by the kernel's own networking stack, at line rate, with kube-proxy involved only when the set of backing pods changes.</p>
 
 <table>
-<thead><tr><th>Vulnerability</th><th>Data crosses into…</th><th>…and is interpreted as</th></tr></thead>
+<thead><tr><th>Mode</th><th>Mechanism</th><th>Backend selection</th><th>Notable cost</th></tr></thead>
 <tbody>
-<tr><td>SQL injection</td><td>The database</td><td>Query structure</td></tr>
-<tr><td>XSS</td><td>The browser</td><td>Markup and script</td></tr>
-<tr><td>Command injection</td><td>A shell</td><td>Commands</td></tr>
-<tr><td>Path traversal</td><td>The filesystem</td><td>A path</td></tr>
-<tr><td>SSRF</td><td>Your network</td><td>A destination to fetch</td></tr>
-<tr><td>Deserialisation</td><td>The runtime</td><td>Objects, sometimes code</td></tr>
-<tr><td>Template injection</td><td>A template engine</td><td>Template syntax</td></tr>
+<tr><td><strong>iptables</strong></td><td>A chain of NAT rules per Service, one jump target per backend pod</td><td>Effectively random, weighted by rule order — a probabilistic match, not a real load balancer</td><td>Rule evaluation is roughly linear in Service and endpoint count; rule <em>updates</em> replace the whole ruleset, which gets slow on very large clusters</td></tr>
+<tr><td><strong>IPVS</strong></td><td>A kernel-level virtual server with real load-balancing algorithms</td><td>Actual algorithms — round robin, least connection, and others — not order-dependent luck</td><td>Needs the IPVS kernel modules; more moving parts than iptables, in exchange for scaling to far more Services without rule-evaluation cost growing linearly</td></tr>
 </tbody>
 </table>
 
-<p>The fix has the same shape every time: <strong>separate data from structure at the interface</strong>, so no amount of hostile content can change the structure. Parameterised queries do this for SQL. Contextual escaping does it for HTML. <code>execve</code> with an argument array does it for shells. Sanitising, blocklisting and escaping-by-hand are all attempts to solve it inside the data, and all of them have a bypass.</p>
+<p>Both modes implement the identical logical behaviour — a ClusterIP resolves to one of the Service's healthy backend pods — and a client can't tell which one a cluster runs by observing traffic. The difference only shows up as scaling and load-distribution-quality characteristics as a cluster's Service count grows, which is exactly why IPVS became the recommended mode for large clusters rather than a strict replacement for iptables everywhere.</p>
 
-<div class="callout bad">
-  <span class="tag">Why filtering fails</span>
-  <p>A blocklist enumerates badness, and the attacker only needs one thing you did not think of. Encoding tricks, Unicode normalisation, double encoding, nested payloads that reassemble after your filter strips the inner one — the search space belongs to the attacker. Parameterisation is different in kind: the query structure is fixed <em>before</em> any user data is bound, so there is no parsing step for the data to influence. Prefer mechanisms that make the attack impossible over mechanisms that try to recognise it.</p>
-</div>
+<h2>10.3 EndpointSlices: the list kube-proxy is actually reacting to</h2>
 
-<h2>18.2 Cross-site scripting</h2>
+<p>A Service's <code>spec</code> never lists backend pods — it only holds a label selector. The live, continuously-updated list of matching, <em>ready</em> pod IPs lives in a separate object family, <strong>EndpointSlices</strong>, maintained by a controller that watches pods matching the selector and their Ready condition from Chapter 6. This is the same split Chapter 1 established for every other object: the Service's spec is what you asked for (route to pods matching this selector), and EndpointSlices are the continuously reconciled observed state of who currently qualifies.</p>
 
-<p>XSS is script running in your origin, which means it inherits everything the origin can do: read the DOM, read non-<code>HttpOnly</code> cookies, make authenticated requests, and rewrite the page. Three variants:</p>
+<p>Only <code>Ready</code> pods appear in an EndpointSlice at all. A pod that is <code>Running</code> but failing its readiness probe is not merely deprioritised — it is entirely absent from the list kube-proxy programs its rules from, which is the concrete mechanism behind the readiness behaviour described in Chapter 6: the platform-level guarantee that an unready pod receives zero traffic is enforced right here, at rule-generation time, not by any cooperation from the client.</p>
 
-<ul>
-<li><strong>Reflected</strong> — the payload is in the request and echoed into the response. Needs a crafted link.</li>
-<li><strong>Stored</strong> — the payload is persisted and served to everyone. The dangerous one.</li>
-<li><strong>DOM-based</strong> — no server involvement; client-side JavaScript writes untrusted data into a dangerous sink like <code>innerHTML</code>, <code>document.write</code> or <code>eval</code>.</li>
-</ul>
-
-<p>Escaping is <strong>context-dependent</strong>, and this is where hand-rolled defences fail. The same string needs different treatment in HTML text, an attribute, a URL, inside a <code>&lt;script&gt;</code> block, or in CSS. Use a template engine that escapes automatically and knows the context; treat any manual escape as a smell.</p>
-
-<h2>18.3 The headers that matter</h2>
-
-<p>Response headers and cookie flags are cheap and disproportionately effective. Configure them below and see what each one buys.</p>
+<h2>10.4 Watch a rewrite happen</h2>
 
 <div class="demo">
-  <div class="demohead"><span>Interactive · headers and cookie flags</span><span id="whstat">0 of 7 enabled</span></div>
+  <div class="demohead"><span>Interactive · ClusterIP resolution, one packet at a time</span><span id="svcstat">3 ready endpoints</span></div>
   <div class="demobody">
-    <div class="ctl" id="whctl"></div>
-    <div class="out" id="whresp" style="margin-bottom:14px"></div>
-    <div class="out" id="whout" style="background:#fff"></div>
+    <div class="ctl">
+      <label>Backend pods</label>
+      <button class="chip on" data-pod="a">pod-a: Ready</button>
+      <button class="chip on" data-pod="b">pod-b: Ready</button>
+      <button class="chip on" data-pod="c">pod-c: Ready</button>
+      <button class="chip" id="svcsend">Send request to ClusterIP 10.96.0.55:80</button>
+    </div>
+    <div class="out" id="svcout" style="margin-top:4px">Toggle a pod to Not Ready and send a few requests — watch it disappear from rotation entirely, not just get skipped occasionally.</div>
+    <div class="out" id="svclog" style="margin-top:10px;max-height:150px;overflow-y:auto"></div>
   </div>
-  <div class="demonote">None of these fixes a vulnerability. They reduce what an attacker can do once one exists — which is exactly the defence-in-depth argument from Chapter 1, and only counts because these layers fail independently of your application code.</div>
+  <div class="demonote">This is the literal mechanism, not an approximation: flip a pod's readiness and its IP is removed from the EndpointSlice kube-proxy reads, so the rewrite rule for it stops existing. There is no window where a "known unready" pod receives a deprioritised trickle of traffic — it gets none.</div>
 </div>
 
-<h2>18.4 CSRF, and what SameSite changed</h2>
+<script>
+(function(){
+  var pods = {a:true, b:true, c:true};
+  var log = document.getElementById('svclog');
+  var stat = document.getElementById('svcstat');
+  var out = document.getElementById('svcout');
 
-<p>The browser attaches your cookies to any request to a site, regardless of which page triggered it. So a form on <code>evil.com</code> posting to <code>bank.example/transfer</code> arrives fully authenticated. The application cannot tell it apart from a legitimate submission, because in every respect that matters it is one.</p>
+  function readyList(){ return Object.keys(pods).filter(function(k){ return pods[k]; }); }
+  function renderStat(){
+    var n = readyList().length;
+    stat.textContent = n + ' ready endpoint' + (n===1?'':'s');
+  }
 
-<p><code>SameSite=Lax</code> became the browser default around 2020 and removed most of this class: cookies are not sent on cross-site POSTs. It is a default, not a guarantee — older clients, deliberate <code>SameSite=None</code> for legitimate cross-site flows, and GET-based state changes all remain exposed. So keep a token defence for anything that changes state:</p>
+  document.querySelectorAll('[data-pod]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var k = b.dataset.pod;
+      pods[k] = !pods[k];
+      b.classList.toggle('on', pods[k]);
+      b.textContent = 'pod-' + k + ': ' + (pods[k] ? 'Ready' : 'NotReady');
+      renderStat();
+      var line = document.createElement('div');
+      line.innerHTML = pods[k]
+        ? '<span style="color:#0B8A5B">EndpointSlice: pod-'+k+' added</span> — a rewrite rule for it now exists'
+        : '<span style="color:#C1121F">EndpointSlice: pod-'+k+' removed</span> — its rewrite rule is gone; it cannot be selected next request, not even rarely';
+      log.insertBefore(line, log.firstChild);
+    });
+  });
 
-<ul>
-<li><strong>Synchroniser token</strong> — a random per-session value in the form, checked server-side. Still the standard.</li>
-<li><strong>Double-submit cookie</strong> — the same value in a cookie and a header; the attacker can cause the cookie to be sent but cannot read it to set the header. Weaker if subdomains are compromised.</li>
-<li><strong>Origin / Sec-Fetch-Site checks</strong> — modern browsers send these and they cannot be forged by page content.</li>
-</ul>
+  document.getElementById('svcsend').addEventListener('click', function(){
+    var ready = readyList();
+    var line = document.createElement('div');
+    if (!ready.length) {
+      line.innerHTML = '<strong style="color:#C1121F">Connection refused / times out</strong> — 10.96.0.55:80 has zero endpoints. The ClusterIP is a fiction with nothing left to rewrite to.';
+    } else {
+      var pick = ready[Math.floor(Math.random()*ready.length)];
+      line.innerHTML = '10.96.0.55:80 → rewritten to <strong>pod-'+pick+'</strong> (chosen from {'+ready.join(', ')+'})';
+    }
+    log.insertBefore(line, log.firstChild);
+  });
 
-<div class="callout warn">
-  <span class="tag">Never use GET for state changes</span>
-  <p>A GET that changes state is reachable from an <code>&lt;img&gt;</code> tag, a link, a prefetch, or a corporate proxy warming its cache. <code>SameSite=Lax</code> deliberately still sends cookies on top-level GET navigations, so it does not protect these. This is also why 0-RTT early data (Ch. 13) is safe for GET and unsafe for anything else — the same idempotency requirement, arriving from a different direction.</p>
-</div>
+  renderStat();
+})();
+</script>
 
-<h2>18.5 SSRF</h2>
+<h2>10.5 Session affinity: the one thing that breaks the fiction on purpose</h2>
 
-<p>Your application fetches a URL the user supplied — a webhook, an image import, a PDF renderer. The request originates from <em>inside</em> your network, so it reaches things the user never could. In cloud environments the classic target is the instance metadata service at <code>169.254.169.254</code>, which hands out credentials to anything that asks.</p>
+<p>By default every connection is an independent rewrite decision — two requests from the same client can land on two different backend pods with no relationship between them, which is correct for stateless services and wrong for anything relying on server-held session state. Setting <code>sessionAffinity: ClientIP</code> changes the rewrite rule to key on source IP: the same client address is pinned to the same backend pod for a configurable timeout, at the packet level, with no cookie, token, or application cooperation required.</p>
 
-<p>This was the 2019 Capital One breach: an SSRF in a WAF let an attacker reach metadata, retrieve IAM role credentials, and read over a hundred million records from S3.</p>
+<p>The cost is real and worth knowing before reaching for it: it affines by <em>IP</em>, not by client identity, so any client population sharing an address — everyone behind one corporate NAT gateway, or every user of a mobile carrier's shared IP pool — is pinned to one backend pod together, concentrating load exactly where you didn't intend it. Application-level session handling (a sticky cookie, or no server-side session state at all) avoids this failure mode entirely and is why most services above a certain scale keep affinity off.</p>
 
-<p>Defences, in order of effectiveness:</p>
-<ul>
-<li><strong>Allowlist destinations</strong> where the use case permits. The only robust answer.</li>
-<li><strong>Egress network policy</strong> — the fetching workload should not be able to reach internal ranges or the metadata endpoint at all. This is a Chapter 22 control and it does not depend on getting the code right.</li>
-<li><strong>IMDSv2</strong> — requires a PUT to obtain a token and rejects requests with a forwarded header, which defeats naive SSRF. Enforce it; v1 remains available otherwise.</li>
-<li><strong>Careful URL handling</strong> — and be aware that blocklisting IPs is fragile: DNS rebinding, redirects, IPv6 forms, decimal and octal encodings, and <code>0.0.0.0</code> all bypass naive checks.</li>
-</ul>
-
-<h2>18.6 The rest of the Top 10, briefly</h2>
-
-<table>
-<thead><tr><th>Category</th><th>The essence</th><th>What actually helps</th></tr></thead>
-<tbody>
-<tr><td>Broken access control</td><td>The most common category. Authorisation checked at the UI, or not per-object.</td><td>Check on every request, server-side, against the object being touched — not just the route</td></tr>
-<tr><td>Cryptographic failures</td><td>Secrets in plaintext, home-rolled crypto, bad password storage</td><td>Chapters 3, 4 and 21</td></tr>
-<tr><td>Insecure design</td><td>The flaw is in the requirements, not the code</td><td>Threat modelling before implementation</td></tr>
-<tr><td>Security misconfiguration</td><td>Defaults, debug endpoints, verbose errors, open buckets</td><td>Hardened baselines, scanning in CI</td></tr>
-<tr><td>Vulnerable components</td><td>Your dependencies are your attack surface</td><td>SBOMs, automated updates, and knowing what you ship</td></tr>
-<tr><td>Auth failures</td><td>Weak sessions, credential stuffing, no MFA</td><td>Chapter 19</td></tr>
-<tr><td>Integrity failures</td><td>Unsigned updates, compromised build pipelines</td><td>Signing (Ch. 7), SRI, supply-chain controls</td></tr>
-<tr><td>Logging failures</td><td>Breaches undetected for months</td><td>Log auth events and access decisions; alert on anomalies</td></tr>
-<tr><td>SSRF</td><td>Above</td><td>Egress policy plus allowlists</td></tr>
-</tbody>
-</table>
-
-<p>Note the top entry. <strong>Broken access control is consistently the largest category</strong>, and it has nothing to do with cryptography or clever payloads. It is usually a missing <code>if</code> — an endpoint that checks you are logged in but not that the record belongs to you.</p>
-
-<h2>18.7 Lab</h2>
+<h2>10.6 Lab · watch rules, endpoints and affinity from outside</h2>
 
 <div class="lab">
-  <div class="labhead"><span>Shell · audit a site's headers and cookies</span><button data-copy>Copy</button></div>
-<pre><code># Every security-relevant response header, in one shot
-curl -sSI https://example.com | grep -iE \
-  'strict-transport|content-security|x-frame|x-content-type|referrer-policy|permissions-policy|set-cookie|cross-origin'
+  <div class="labhead"><span>Shell · the fiction, inspected from the node's own rule tables</span><button data-copy>Copy</button></div>
+<pre><code># Which mode is this cluster actually running?
+kubectl get cm -n kube-system kube-proxy -o yaml | grep -A2 "mode:"
 
-# Cookie flags \u2014 look for Secure, HttpOnly and SameSite on EVERY cookie
-curl -sSI https://example.com | grep -i '^set-cookie' | while read -r c; do
-  echo "$c"
-  for f in Secure HttpOnly SameSite; do
-    echo "$c" | grep -qi "$f" && echo "   \u2713 $f" || echo "   \u2717 $f MISSING"
-  done
-done
+# The Service's own view: just a selector, no pod IPs
+kubectl get svc web -o jsonpath='{.spec.selector}'
 
-# Is HSTS strong enough to be preloaded?
-curl -sSI https://example.com | grep -i strict-transport
-#   Needs: max-age >= 31536000; includeSubDomains; preload
-#   Check status: https://hstspreload.org/?domain=example.com
+# The live, reconciled backend list kube-proxy is actually reading
+kubectl get endpointslices -l kubernetes.io/service-name=web -o yaml \
+  | grep -A3 addresses
 
-# Does the site redirect HTTP to HTTPS, and does HSTS then take over?
-curl -sSI http://example.com | head -5
+# See the literal iptables rules a ClusterIP resolves through — on a
+# node, look for the Service's own chain
+sudo iptables -t nat -L KUBE-SERVICES -n | grep <clusterIP>
+sudo iptables -t nat -L KUBE-SVC-<hash> -n     # the per-backend jump targets
 
-# CSP, readably
-curl -sSI https://example.com | grep -i content-security-policy \
-  | tr ';' '\n' | sed 's/^ */  /'
-#   Look for 'unsafe-inline' and 'unsafe-eval' \u2014 both largely defeat the point.
+# Or, on an IPVS-mode cluster, the equivalent virtual server directly
+sudo ipvsadm -L -n | grep -A4 <clusterIP>
 
-# CORS: is the origin reflected? A reflecting server with credentials is a serious bug.
-curl -sSI -H "Origin: https://evil.example" https://example.com/api/ \
-  | grep -i 'access-control-allow'
-#   Access-Control-Allow-Origin: https://evil.example  +  Allow-Credentials: true
-#   = any site can read authenticated responses. Never reflect arbitrary origins.
-
-# Subresource Integrity on third-party scripts
-curl -sS https://example.com | grep -oE '<script[^>]*src="https://[^"]*"[^>]*>' \
-  | grep -v integrity= | head
-#   Any external script without an integrity attribute is a CDN compromise away
-#   from executing arbitrary code in your origin.
-
-# Server-side: nginx headers worth setting
-cat <<'NGINX'
-add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-add_header Content-Security-Policy   "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
-add_header X-Content-Type-Options    "nosniff" always;
-add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
-add_header Permissions-Policy        "geolocation=(), camera=(), microphone=()" always;
-NGINX</code></pre>
+# Confirm the readiness-to-endpoint link for yourself: flip a pod
+# unready and watch it vanish from the slice, live
+kubectl exec web-abc -- sh -c "touch /tmp/unready"   # however this pod's probe is wired
+kubectl get endpointslices -l kubernetes.io/service-name=web -w</code></pre>
 </div>
 
 <div class="quiz">
   <h3>Knowledge check</h3>
 
   <div class="q" data-answer="2">
-    <p class="qtext">Why are parameterised queries a stronger defence against SQL injection than escaping input?</p>
+    <p class="qtext"><code>ping</code> against a Service's ClusterIP gets no response, but a client application connecting to the same address on the right port works fine. Why?</p>
     <div class="opts">
-      <button class="opt">They are faster</button>
-      <button class="opt">They encrypt the query in transit</button>
-      <button class="opt">The query structure is fixed before user data is bound, so data can never become structure</button>
-      <button class="opt">They validate data types automatically</button>
+      <button class="opt">ClusterIPs are firewalled against ICMP for security reasons</button>
+      <button class="opt">The ClusterIP is assigned to a real, otherwise-idle network interface that only forwards TCP</button>
+      <button class="opt">The ClusterIP has no real listener at all — it's a lookup key for packet-rewrite rules keyed on destination port, and ICMP has no port for those rules to match against</button>
+      <button class="opt">ping is blocked by kube-proxy specifically, unrelated to how Services work</button>
     </div>
-    <p class="why">Escaping tries to neutralise dangerous characters inside the data, and the attacker gets unlimited attempts at encodings you did not anticipate. Parameterisation removes the parsing step entirely — the database receives a fixed structure plus values, and no value can alter the structure. Same principle as contextual auto-escaping for HTML and argument arrays for shells.</p>
-  </div>
-
-  <div class="q" data-answer="0">
-    <p class="qtext">What does <code>HttpOnly</code> on a session cookie prevent?</p>
-    <div class="opts">
-      <button class="opt">JavaScript reading the cookie, so XSS cannot exfiltrate the session directly</button>
-      <button class="opt">The cookie being sent over plain HTTP</button>
-      <button class="opt">The cookie being sent on cross-site requests</button>
-      <button class="opt">The cookie being stored on disk</button>
-    </div>
-    <p class="why">It blocks <code>document.cookie</code> access. Note what it does <em>not</em> do: injected script can still make authenticated requests from within the page, because the browser attaches the cookie automatically. HttpOnly limits exfiltration, not abuse. The other three options describe Secure and SameSite.</p>
-  </div>
-
-  <div class="q" data-answer="3">
-    <p class="qtext">An application fetches user-supplied URLs to generate link previews. What is the highest-value defence?</p>
-    <div class="opts">
-      <button class="opt">Blocking URLs containing "169.254.169.254"</button>
-      <button class="opt">Validating that the URL uses HTTPS</button>
-      <button class="opt">Rate limiting the endpoint</button>
-      <button class="opt">Egress network policy preventing that workload from reaching internal ranges or the metadata endpoint at all</button>
-    </div>
-    <p class="why">String blocklists are bypassed by DNS rebinding, redirects, IPv6 forms and decimal or octal encodings — the attacker controls the search space. A network control does not depend on parsing the URL correctly and holds even when the code is wrong. Combine with an allowlist and IMDSv2 where possible.</p>
+    <p class="why">A ClusterIP is never bound by any process — it exists purely as the trigger for a rewrite rule that substitutes in a real pod IP before the packet is routed. That rewrite is keyed on destination port, which a TCP SYN has and an ICMP echo request does not, so ICMP simply has nothing to match against and gets no rewrite, and no response.</p>
   </div>
 
   <div class="q" data-answer="1">
-    <p class="qtext">Which vulnerability category is consistently the most common in the OWASP Top 10?</p>
+    <p class="qtext">A pod backing a Service starts failing its readiness probe but keeps running. What happens to traffic already being routed to it via that Service?</p>
     <div class="opts">
-      <button class="opt">Cryptographic failures</button>
-      <button class="opt">Broken access control</button>
-      <button class="opt">Injection</button>
-      <button class="opt">Security misconfiguration</button>
+      <button class="opt">It continues to receive a reduced, deprioritised share of new connections</button>
+      <button class="opt">Its address is removed from the EndpointSlice entirely, so no new connections through the Service are ever routed to it — existing connections aren't forcibly cut, but nothing new arrives</button>
+      <button class="opt">It receives no new connections for exactly one probe interval, then resumes normally</button>
+      <button class="opt">kube-proxy marks it for eviction and it is rescheduled elsewhere</button>
     </div>
-    <p class="why">It is rarely exotic — usually an endpoint that verifies you are authenticated but not that the record you asked for is yours. No cryptography involved, no clever payload, just a missing check. Authorisation must be enforced server-side, on every request, against the specific object being accessed.</p>
+    <p class="why">Readiness isn't a weighting signal, it's a binary presence check for the EndpointSlice. An unready pod's address simply isn't in the list kube-proxy generates rules from, so it cannot be selected for new connections at all — not occasionally, not at reduced rate. Existing connections aren't torn down by this mechanism, but nothing new lands there until it's ready again.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Setting sessionAffinity: ClientIP on a Service pins requests from the same source address to the same backend pod. What is the specific risk this introduces?</p>
+    <div class="opts">
+      <button class="opt">It disables load balancing entirely, sending all traffic to one pod regardless of source</button>
+      <button class="opt">It requires every client to support cookies, which not all clients do</button>
+      <button class="opt">It only works with the IPVS kube-proxy mode, not iptables</button>
+      <button class="opt">Any client population sharing a single source IP — behind a corporate NAT gateway or a carrier-grade NAT pool — gets pinned together onto one backend pod, concentrating load rather than distributing it</button>
+    </div>
+    <p class="why">Affinity by ClientIP has no visibility into how many distinct real clients sit behind that one address. A large population behind shared NAT is treated as a single "client" for pinning purposes, which can badly concentrate load onto whichever backend pod happened to get picked first — a failure mode application-level session handling doesn't share.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">A cluster migrates its kube-proxy mode from iptables to IPVS with no other changes. What should a client of any Service in that cluster observe?</p>
+    <div class="opts">
+      <button class="opt">No behavioural difference in what a ClusterIP resolves to — both modes implement the same logical Service-to-pod routing; only internal scaling and load-distribution-quality characteristics differ</button>
+      <button class="opt">ClusterIPs need to be reassigned after the migration</button>
+      <button class="opt">Services must be recreated for the new mode to take effect</button>
+      <button class="opt">Only NodePort-type Services continue working; ClusterIP-type Services break</button>
+    </div>
+    <p class="why">Like the CNI mode question in Chapter 9, kube-proxy's two modes are two implementations of one contract: resolve a ClusterIP to a healthy backend. A client can't distinguish them from the outside — the difference is internal to how the node computes and updates rules at scale, not what those rules logically do.</p>
   </div>
 </div>
 
-<h2>18.8 Carry forward</h2>
+<h2>10.7 What to carry into Chapter 11</h2>
 <ul>
-<li>Most web vulnerabilities are attacker data crossing a boundary and being interpreted as structure.</li>
-<li>Separate data from structure at the interface. Filtering is a losing game.</li>
-<li>Escaping is context-dependent; use an auto-escaping template engine.</li>
-<li>Headers and cookie flags are cheap layers that fail independently of your code.</li>
-<li>SameSite removed most CSRF but is not a substitute for tokens on state-changing routes.</li>
-<li>SSRF is best solved at the network, not in the URL parser.</li>
-<li>Broken access control is the biggest category, and it is usually a missing check.</li>
+<li>A ClusterIP has no real listener — it's a key that node-local packet-rewrite rules match on, substituting in a real, chosen pod IP before the packet is routed.</li>
+<li>kube-proxy is a controller like any other: it watches Services and EndpointSlices and rewrites local rules on change, but takes no part in the actual data path afterward.</li>
+<li>iptables and IPVS are two implementations of identical logical behaviour, differing in load-distribution quality and how their rule-update cost scales with cluster size.</li>
+<li>EndpointSlices are the concrete mechanism behind readiness's traffic guarantee — an unready pod is absent from the list, not deprioritised within it.</li>
+<li>Session affinity pins by source IP, which risks concentrating shared-NAT client populations onto a single backend.</li>
 </ul>
+
+<p>Everything so far has assumed you already know a Service's ClusterIP or name. The next chapter is how a pod actually turns a name like <code>web.default.svc.cluster.local</code> — or just <code>web</code> — into that address in the first place.</p>
 
 <div class="donebar"></div>
 <nav class="chapfoot"></nav>
 </div>
 </main>
 </div>
-
-<script>
-(function(){
-  var H = [
-    { id:'hsts', label:'HSTS',
-      hdr:'Strict-Transport-Security: max-age=63072000; includeSubDomains; preload',
-      t:'HTTP Strict Transport Security',
-      on:'The browser refuses plaintext HTTP for this host for two years, upgrading every request before it leaves the machine. This kills <strong>SSL stripping</strong> (Ch. 2), where an attacker intercepts the initial HTTP request and keeps the victim on plaintext while speaking HTTPS to the server \u2014 the padlock simply never appears and most users never look.<br><br><code>preload</code> submits the domain to a list compiled into browsers, closing the one remaining gap: the very first visit, before any HSTS header has been seen. <span style="color:#E8A317">Preloading is hard to reverse</span> \u2014 removal takes months to propagate \u2014 so be certain every subdomain can serve HTTPS first.',
-      off:'<span style="color:#C1121F">Without it, the first request is plaintext.</span> A user typing <code>bank.example</code> sends an HTTP request that an on-path attacker intercepts, and SSL stripping proceeds from there. Your redirect to HTTPS is itself unprotected \u2014 the attacker simply does not deliver it.' },
-
-    { id:'csp', label:'CSP',
-      hdr:"Content-Security-Policy: default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-      t:'Content Security Policy',
-      on:'Declares which sources may load and execute. Injected <code>&lt;script src="//evil.example"&gt;</code> is blocked, and with a nonce- or hash-based policy inline script is blocked too \u2014 which is most XSS payloads.<br><br>CSP does not fix XSS; it limits what a successful XSS can do. <code>base-uri \'none\'</code> stops an injected <code>&lt;base&gt;</code> tag redirecting every relative URL. <code>frame-ancestors \'none\'</code> replaces X-Frame-Options.<br><br><span style="color:#E8A317">A policy containing <code>\'unsafe-inline\'</code> gives up most of the benefit.</span> Deploy with <code>Content-Security-Policy-Report-Only</code> first and read the reports before enforcing.',
-      off:'<span style="color:#C1121F">Any successful injection runs with the full authority of your origin.</span> It can read the DOM, read non-HttpOnly cookies, make authenticated requests, rewrite the page and exfiltrate anywhere. CSP is the difference between an XSS bug and an XSS incident.' },
-
-    { id:'secure', label:'Cookie: Secure',
-      hdr:'Set-Cookie: session=\u2026; Secure',
-      t:'Secure cookie flag',
-      on:'The cookie is only ever transmitted over HTTPS. Without it, a single plaintext request \u2014 a stray <code>http://</code> link, an image, a redirect that fires before HSTS applies \u2014 sends the session cookie in the clear to anyone on the path.',
-      off:'<span style="color:#C1121F">One plaintext request leaks the session.</span> It need not be a page load: an <code>&lt;img src="http://your-site/x"&gt;</code> on any page the user visits is enough to make their browser send the cookie unencrypted.' },
-
-    { id:'httponly', label:'Cookie: HttpOnly',
-      hdr:'Set-Cookie: session=\u2026; HttpOnly',
-      t:'HttpOnly cookie flag',
-      on:'JavaScript cannot read the cookie via <code>document.cookie</code>, so an XSS payload cannot simply exfiltrate the session to an attacker\u2019s server.<br><br><span style="color:#E8A317">Understand the limit.</span> Injected script can still <em>use</em> the session, because the browser attaches the cookie to requests automatically. HttpOnly stops the attacker taking the session away with them; it does not stop them acting as the user while the page is open. That is a meaningful difference \u2014 it turns a persistent compromise into a transient one \u2014 but it is not a fix for XSS.',
-      off:'<span style="color:#C1121F">Any XSS becomes full session theft.</span> Three lines of injected script send the cookie to an attacker-controlled endpoint, and they then have the session from their own machine, indefinitely.' },
-
-    { id:'samesite', label:'Cookie: SameSite=Lax',
-      hdr:'Set-Cookie: session=\u2026; SameSite=Lax',
-      t:'SameSite cookie attribute',
-      on:'The cookie is not sent on cross-site POSTs, which removes most <strong>CSRF</strong>. A form on <code>evil.example</code> posting to your transfer endpoint now arrives unauthenticated.<br><br><code>Lax</code> deliberately still sends cookies on top-level GET navigations, so links from other sites keep working \u2014 which is exactly why <strong>a GET must never change state</strong>. <code>Strict</code> blocks those too, at the cost of users arriving from external links appearing logged out.<br><br>Browsers default to Lax now, but keep a synchroniser token: the default does not cover older clients, deliberate <code>SameSite=None</code> flows, or GET-based state changes.',
-      off:'<span style="color:#C1121F">Cross-site requests carry full credentials.</span> Any page the user visits can submit an authenticated form to your application, and your server cannot distinguish it from a legitimate one.' },
-
-    { id:'nosniff', label:'X-Content-Type-Options',
-      hdr:'X-Content-Type-Options: nosniff',
-      t:'MIME sniffing prevention',
-      on:'The browser honours the declared <code>Content-Type</code> instead of guessing from content. Without it, a file you serve as <code>text/plain</code> that happens to contain markup can be interpreted as HTML and executed in your origin \u2014 turning a benign file upload into stored XSS.',
-      off:'<span style="color:#E8A317">Uploaded files can be reinterpreted.</span> A user-supplied file served from your domain may execute as HTML or script regardless of the type you set. Serve user content from a separate origin as well, so even a successful sniff lands somewhere harmless.' },
-
-    { id:'referrer', label:'Referrer-Policy',
-      hdr:'Referrer-Policy: strict-origin-when-cross-origin',
-      t:'Referrer policy',
-      on:'Cross-origin requests send only your origin, not the full path and query string. Without it, a password-reset URL or a document link with a token leaks to every third-party asset the page loads, and into their logs.',
-      off:'<span style="color:#E8A317">Full URLs leak to third parties.</span> Any analytics script, font, or embedded image receives the complete URL of the page the user was on \u2014 including tokens, record IDs and search terms sitting in the query string.' }
-  ];
-
-  var state = {};
-  H.forEach(function(h){ state[h.id]=false; });
-
-  var ctl=document.getElementById('whctl');
-  H.forEach(function(h){
-    var b=document.createElement('button');
-    b.className='chip'; b.textContent=h.label; b.dataset.h=h.id;
-    ctl.appendChild(b);
-  });
-  var all=document.createElement('button');
-  all.className='chip'; all.id='whall'; all.textContent='Enable all';
-  all.style.marginLeft='10px'; ctl.appendChild(all);
-
-  function render(sel){
-    var on = H.filter(function(h){ return state[h.id]; });
-    document.getElementById('whstat').textContent = on.length+' of '+H.length+' enabled';
-    document.getElementById('whstat').style.color = on.length===H.length ? '#0B8A5B' : (on.length===0?'#C1121F':'#4A4F58');
-
-    document.getElementById('whresp').innerHTML =
-      '<span style="color:#4A4F58">HTTP/2 200</span><br>' +
-      (on.length
-        ? on.map(function(h){
-            var p=h.hdr.split(': ');
-            return '<span style="color:#1B4FD8">'+p[0]+'</span>: '+p.slice(1).join(': ');
-          }).join('<br>')
-        : '<span style="color:#C1121F">(no security headers set)</span>') +
-      '<br><span style="color:#4A4F58">content-type: text/html</span>';
-
-    var h = sel ? H.filter(function(x){return x.id===sel;})[0] : null;
-    if(!h){
-      document.getElementById('whout').innerHTML = on.length===H.length
-        ? '<span style="color:#0B8A5B"><strong>All seven set.</strong></span> None of these fixes a vulnerability \u2014 they bound what an attacker can do once one exists. That is the whole defence-in-depth argument from Chapter 1, and it only counts because these controls fail independently of your application code: a missing authorisation check does not disable CSP, and an XSS bug does not clear the HttpOnly flag.<br><br>Click any header above for what it specifically buys you.'
-        : 'Click any header or flag above to see what it does, and what happens without it. Toggle them to build a response.';
-      document.getElementById('whout').style.borderLeft='';
-      return;
-    }
-    var isOn = state[h.id];
-    document.getElementById('whout').innerHTML =
-      '<strong>'+h.t+'</strong> &nbsp;<span style="font-family:var(--mono);font-size:11px;color:'+(isOn?'#0B8A5B':'#C1121F')+'">'+(isOn?'ENABLED':'NOT SET')+'</span><br><br>'+
-      (isOn ? h.on : h.off);
-    document.getElementById('whout').style.borderLeft='3px solid '+(isOn?'#0B8A5B':'#C1121F');
-  }
-
-  ctl.addEventListener('click',function(e){
-    var b=e.target.closest('[data-h]');
-    if(b){
-      state[b.dataset.h] = !state[b.dataset.h];
-      b.classList.toggle('on', state[b.dataset.h]);
-      render(b.dataset.h);
-      return;
-    }
-    if(e.target.id==='whall'){
-      var allOn = H.every(function(h){ return state[h.id]; });
-      H.forEach(function(h){ state[h.id] = !allOn; });
-      ctl.querySelectorAll('[data-h]').forEach(function(x){ x.classList.toggle('on', !allOn); });
-      e.target.textContent = allOn ? 'Enable all' : 'Clear all';
-      render(null);
-    }
-  });
-
-  render(null);
-})();
-</script>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -1070,7 +930,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:

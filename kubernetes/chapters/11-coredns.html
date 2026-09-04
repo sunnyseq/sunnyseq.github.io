@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>18 · Web application security — The Wire</title>
+<title>11 · DNS and service discovery — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -300,7 +300,7 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-the-wire" data-chapter="18">
+<body class="course-kubernetes" data-chapter="11">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
@@ -308,339 +308,201 @@ svg{max-width:100%;height:auto;display:block}
 <nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part V &nbsp;·&nbsp; Applied and operational &nbsp;·&nbsp; Chapter 18</p>
-  <h1>Web application security</h1>
-  <p class="lede">TLS delivers bytes intact from one endpoint to another. It has nothing to say about whether those bytes should have been sent, or what the receiving application does with them. Almost every breach you have read about happened above the transport layer, on a connection with a perfectly valid padlock.</p>
+  <p class="eyebrow">Part III &nbsp;&middot;&nbsp; Networking &nbsp;&middot;&nbsp; Chapter 11</p>
+  <h1>DNS and service discovery</h1>
+  <p class="lede">Nobody types a Service's full name. A search-domain list quietly fills in the rest — and quietly, indiscriminately, does the same thing to hostnames that were never meant to be looked up that way.</p>
 </header>
 
 <div class="col">
 
-<h2>18.1 One idea underneath most of it</h2>
+<h2>11.1 CoreDNS is a controller too</h2>
 
-<p>Chapter 1 defined a trust boundary as any line across which data changes trust level. Nearly every vulnerability in this chapter is the same failure: <strong>attacker-controlled data crossing a boundary and being interpreted rather than treated as inert.</strong></p>
+<p>Kubernetes' cluster DNS is not a static zone file someone edits — it is <strong>CoreDNS</strong>, itself running as ordinary pods, watching Services and EndpointSlices exactly the way kube-proxy does, and synthesising DNS records on the fly from whatever currently exists. There is no reconciliation delay to speak of in the way an object's <code>status</code> might lag in earlier chapters — a Service's name resolves the moment the Service object exists, because CoreDNS is generating the answer from live cluster state at query time, not from a table someone populated in advance.</p>
 
-<table>
-<thead><tr><th>Vulnerability</th><th>Data crosses into…</th><th>…and is interpreted as</th></tr></thead>
-<tbody>
-<tr><td>SQL injection</td><td>The database</td><td>Query structure</td></tr>
-<tr><td>XSS</td><td>The browser</td><td>Markup and script</td></tr>
-<tr><td>Command injection</td><td>A shell</td><td>Commands</td></tr>
-<tr><td>Path traversal</td><td>The filesystem</td><td>A path</td></tr>
-<tr><td>SSRF</td><td>Your network</td><td>A destination to fetch</td></tr>
-<tr><td>Deserialisation</td><td>The runtime</td><td>Objects, sometimes code</td></tr>
-<tr><td>Template injection</td><td>A template engine</td><td>Template syntax</td></tr>
-</tbody>
-</table>
+<pre><code>web.default.svc.cluster.local  →  A record  →  10.96.0.55   (the Service's ClusterIP)
+web-0.web.default.svc.cluster.local → A record → 10.244.1.7 (one StatefulSet pod, Ch.15)</code></pre>
 
-<p>The fix has the same shape every time: <strong>separate data from structure at the interface</strong>, so no amount of hostile content can change the structure. Parameterised queries do this for SQL. Contextual escaping does it for HTML. <code>execve</code> with an argument array does it for shells. Sanitising, blocklisting and escaping-by-hand are all attempts to solve it inside the data, and all of them have a bypass.</p>
+<p>The name's structure is fixed and mechanical: <code>&lt;service&gt;.&lt;namespace&gt;.svc.&lt;cluster-domain&gt;</code>, with <code>cluster.local</code> the near-universal default for the last part. Every piece of that name is queryable independently once you know the pattern — which is exactly what makes the shortcuts in the next section both convenient and, occasionally, a source of real production trouble.</p>
 
-<div class="callout bad">
-  <span class="tag">Why filtering fails</span>
-  <p>A blocklist enumerates badness, and the attacker only needs one thing you did not think of. Encoding tricks, Unicode normalisation, double encoding, nested payloads that reassemble after your filter strips the inner one — the search space belongs to the attacker. Parameterisation is different in kind: the query structure is fixed <em>before</em> any user data is bound, so there is no parsing step for the data to influence. Prefer mechanisms that make the attack impossible over mechanisms that try to recognise it.</p>
-</div>
+<h2>11.2 The search domain list: what "just the name" actually costs</h2>
 
-<h2>18.2 Cross-site scripting</h2>
+<p>Nobody types <code>web.default.svc.cluster.local</code> in application code. They write <code>web</code>, or <code>web.default</code>, and it resolves — because every pod's <code>/etc/resolv.conf</code> carries a <strong>search domain list</strong> that the resolver tries, in order, appending each suffix to an unqualified name until one of them answers.</p>
 
-<p>XSS is script running in your origin, which means it inherits everything the origin can do: read the DOM, read non-<code>HttpOnly</code> cookies, make authenticated requests, and rewrite the page. Three variants:</p>
+<pre><code>cat /etc/resolv.conf
+nameserver 10.96.0.10
+search default.svc.cluster.local svc.cluster.local cluster.local
+options ndots:5</code></pre>
 
-<ul>
-<li><strong>Reflected</strong> — the payload is in the request and echoed into the response. Needs a crafted link.</li>
-<li><strong>Stored</strong> — the payload is persisted and served to everyone. The dangerous one.</li>
-<li><strong>DOM-based</strong> — no server involvement; client-side JavaScript writes untrusted data into a dangerous sink like <code>innerHTML</code>, <code>document.write</code> or <code>eval</code>.</li>
-</ul>
+<p>A lookup for the bare name <code>web</code> is not one DNS query. The resolver appends <code>default.svc.cluster.local</code> first (giving <code>web.default.svc.cluster.local</code>), queries it, and only falls through to the next suffix — then, if every suffix in the search list fails, tries the name as-is — if that query doesn't answer. This is normal and invisible for cluster-internal names, since the very first suffix almost always resolves. It stops being invisible the moment the name being looked up is external.</p>
 
-<p>Escaping is <strong>context-dependent</strong>, and this is where hand-rolled defences fail. The same string needs different treatment in HTML text, an attribute, a URL, inside a <code>&lt;script&gt;</code> block, or in CSS. Use a template engine that escapes automatically and knows the context; treat any manual escape as a smell.</p>
+<h2>11.3 ndots:5 — the setting that quietly multiplies external DNS traffic</h2>
 
-<h2>18.3 The headers that matter</h2>
-
-<p>Response headers and cookie flags are cheap and disproportionately effective. Configure them below and see what each one buys.</p>
+<p>The <code>ndots:5</code> option controls something specific: a name is only tried <em>as an absolute name first</em> if it already contains at least 5 dots. <code>api.stripe.com</code> has two dots — nowhere near 5 — so the resolver treats it exactly like a bare cluster name: it tries every search-domain suffix first, generating up to four wasted, guaranteed-to-fail DNS queries against the cluster's own DNS server before finally trying <code>api.stripe.com.</code> as an absolute name on the fifth attempt.</p>
 
 <div class="demo">
-  <div class="demohead"><span>Interactive · headers and cookie flags</span><span id="whstat">0 of 7 enabled</span></div>
+  <div class="demohead"><span>Interactive · resolving a name under ndots:5</span><span id="ndotsq">0 queries so far</span></div>
   <div class="demobody">
-    <div class="ctl" id="whctl"></div>
-    <div class="out" id="whresp" style="margin-bottom:14px"></div>
-    <div class="out" id="whout" style="background:#fff"></div>
+    <div class="ctl">
+      <label>Hostname to resolve</label>
+      <button class="chip on" data-host="api.stripe.com">api.stripe.com (external, 2 dots)</button>
+      <button class="chip" data-host="web">web (cluster Service, 0 dots)</button>
+      <button class="chip" data-host="api.stripe.com.">api.stripe.com. (trailing dot, absolute)</button>
+      <button class="chip" id="ndotsgo">Resolve</button>
+    </div>
+    <div class="out" id="ndotsout" style="max-height:220px;overflow-y:auto">Pick a hostname and resolve it to see exactly which queries fire, in order.</div>
   </div>
-  <div class="demonote">None of these fixes a vulnerability. They reduce what an attacker can do once one exists — which is exactly the defence-in-depth argument from Chapter 1, and only counts because these layers fail independently of your application code.</div>
+  <div class="demonote">The trailing-dot form is the fix application code can apply directly — an absolute name (ending in a literal dot) always skips the search list and queries exactly once, no ndots arithmetic involved.</div>
 </div>
 
-<h2>18.4 CSRF, and what SameSite changed</h2>
+<script>
+(function(){
+  var SEARCH = ['default.svc.cluster.local', 'svc.cluster.local', 'cluster.local'];
+  var host = 'api.stripe.com';
+  var out = document.getElementById('ndotsout');
+  var qcount = document.getElementById('ndotsq');
 
-<p>The browser attaches your cookies to any request to a site, regardless of which page triggered it. So a form on <code>evil.com</code> posting to <code>bank.example/transfer</code> arrives fully authenticated. The application cannot tell it apart from a legitimate submission, because in every respect that matters it is one.</p>
+  document.querySelectorAll('[data-host]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('[data-host]').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on');
+      host = b.dataset.host;
+    });
+  });
 
-<p><code>SameSite=Lax</code> became the browser default around 2020 and removed most of this class: cookies are not sent on cross-site POSTs. It is a default, not a guarantee — older clients, deliberate <code>SameSite=None</code> for legitimate cross-site flows, and GET-based state changes all remain exposed. So keep a token defence for anything that changes state:</p>
+  document.getElementById('ndotsgo').addEventListener('click', function(){
+    var lines = [];
+    var n = 0;
+    var isAbsolute = host.endsWith('.');
+    var dots = (host.match(/\./g) || []).length;
 
-<ul>
-<li><strong>Synchroniser token</strong> — a random per-session value in the form, checked server-side. Still the standard.</li>
-<li><strong>Double-submit cookie</strong> — the same value in a cookie and a header; the attacker can cause the cookie to be sent but cannot read it to set the header. Weaker if subdomains are compromised.</li>
-<li><strong>Origin / Sec-Fetch-Site checks</strong> — modern browsers send these and they cannot be forged by page content.</li>
-</ul>
+    if (isAbsolute) {
+      n = 1;
+      lines.push('<strong>'+host+'</strong> ends in a dot — already absolute. ndots is irrelevant.');
+      lines.push('Query 1: <code>'+host+'</code> → answered directly. <span style="color:#0B8A5B">1 query total.</span>');
+    } else if (dots >= 5) {
+      n = 1;
+      lines.push('<strong>'+host+'</strong> has '+dots+' dots ≥ ndots:5 — tried as absolute FIRST.');
+      lines.push('Query 1: <code>'+host+'.</code> → answered directly. <span style="color:#0B8A5B">1 query total.</span>');
+    } else {
+      lines.push('<strong>'+host+'</strong> has '+dots+' dot(s) &lt; ndots:5 — every search suffix is tried before the bare name.');
+      var answered = false;
+      for (var i = 0; i < SEARCH.length && !answered; i++) {
+        n++;
+        var full = host + '.' + SEARCH[i];
+        var wouldAnswer = (host === 'web' && i === 0); // only the cluster Service case resolves on suffix 1
+        lines.push('Query '+n+': <code>'+full+'</code> → ' + (wouldAnswer ? '<span style="color:#0B8A5B">answered — done.</span>' : '<span style="color:#C1121F">NXDOMAIN</span>'));
+        if (wouldAnswer) answered = true;
+      }
+      if (!answered) {
+        n++;
+        lines.push('Query '+n+': <code>'+host+'</code> (as absolute, last resort) → <span style="color:#0B8A5B">answered — this is the real external lookup, after '+(n-1)+' wasted queries.</span>');
+      }
+    }
+    qcount.textContent = n + ' quer' + (n===1?'y':'ies') + ' fired';
+    out.innerHTML = lines.join('<br>');
+  });
+})();
+</script>
 
 <div class="callout warn">
-  <span class="tag">Never use GET for state changes</span>
-  <p>A GET that changes state is reachable from an <code>&lt;img&gt;</code> tag, a link, a prefetch, or a corporate proxy warming its cache. <code>SameSite=Lax</code> deliberately still sends cookies on top-level GET navigations, so it does not protect these. This is also why 0-RTT early data (Ch. 13) is safe for GET and unsafe for anything else — the same idempotency requirement, arriving from a different direction.</p>
+  <span class="tag">Why this is a real production issue, not trivia</span>
+  <p>A service making frequent calls to an external API — a payment provider, a cloud storage endpoint — pays four extra, guaranteed-to-fail DNS round trips per uncached lookup, multiplied across every pod, every call. At any real request volume this shows up as measurable added latency and real load on the cluster's DNS pods, and it has caused actual CoreDNS outages at scale from nothing more exotic than everyone's HTTP client not caching DNS answers long enough. The fix costs nothing: a trailing dot on external hostnames in code that resolves them directly, or accepting the four wasted queries as a one-time cost behind a DNS-caching layer.</p>
 </div>
 
-<h2>18.5 SSRF</h2>
+<h2>11.4 Headless Services: when you want the pod list, not a ClusterIP</h2>
 
-<p>Your application fetches a URL the user supplied — a webhook, an image import, a PDF renderer. The request originates from <em>inside</em> your network, so it reaches things the user never could. In cloud environments the classic target is the instance metadata service at <code>169.254.169.254</code>, which hands out credentials to anything that asks.</p>
+<p>Setting <code>clusterIP: None</code> on a Service tells CoreDNS not to synthesise a single load-balanced A record at all — instead, a query for the Service's name returns every backing pod's IP directly, as a set of A records, or for a StatefulSet's governing headless Service, a per-pod DNS name like <code>web-0.web.default.svc.cluster.local</code> that always resolves to that exact ordinal's current IP. This is the mechanism Chapter 15's StatefulSets are built on: stable per-instance identity is a DNS naming convention over a headless Service, not a special networking feature of its own.</p>
 
-<p>This was the 2019 Capital One breach: an SSRF in a WAF let an attacker reach metadata, retrieve IAM role credentials, and read over a hundred million records from S3.</p>
-
-<p>Defences, in order of effectiveness:</p>
-<ul>
-<li><strong>Allowlist destinations</strong> where the use case permits. The only robust answer.</li>
-<li><strong>Egress network policy</strong> — the fetching workload should not be able to reach internal ranges or the metadata endpoint at all. This is a Chapter 22 control and it does not depend on getting the code right.</li>
-<li><strong>IMDSv2</strong> — requires a PUT to obtain a token and rejects requests with a forwarded header, which defeats naive SSRF. Enforce it; v1 remains available otherwise.</li>
-<li><strong>Careful URL handling</strong> — and be aware that blocklisting IPs is fragile: DNS rebinding, redirects, IPv6 forms, decimal and octal encodings, and <code>0.0.0.0</code> all bypass naive checks.</li>
-</ul>
-
-<h2>18.6 The rest of the Top 10, briefly</h2>
-
-<table>
-<thead><tr><th>Category</th><th>The essence</th><th>What actually helps</th></tr></thead>
-<tbody>
-<tr><td>Broken access control</td><td>The most common category. Authorisation checked at the UI, or not per-object.</td><td>Check on every request, server-side, against the object being touched — not just the route</td></tr>
-<tr><td>Cryptographic failures</td><td>Secrets in plaintext, home-rolled crypto, bad password storage</td><td>Chapters 3, 4 and 21</td></tr>
-<tr><td>Insecure design</td><td>The flaw is in the requirements, not the code</td><td>Threat modelling before implementation</td></tr>
-<tr><td>Security misconfiguration</td><td>Defaults, debug endpoints, verbose errors, open buckets</td><td>Hardened baselines, scanning in CI</td></tr>
-<tr><td>Vulnerable components</td><td>Your dependencies are your attack surface</td><td>SBOMs, automated updates, and knowing what you ship</td></tr>
-<tr><td>Auth failures</td><td>Weak sessions, credential stuffing, no MFA</td><td>Chapter 19</td></tr>
-<tr><td>Integrity failures</td><td>Unsigned updates, compromised build pipelines</td><td>Signing (Ch. 7), SRI, supply-chain controls</td></tr>
-<tr><td>Logging failures</td><td>Breaches undetected for months</td><td>Log auth events and access decisions; alert on anomalies</td></tr>
-<tr><td>SSRF</td><td>Above</td><td>Egress policy plus allowlists</td></tr>
-</tbody>
-</table>
-
-<p>Note the top entry. <strong>Broken access control is consistently the largest category</strong>, and it has nothing to do with cryptography or clever payloads. It is usually a missing <code>if</code> — an endpoint that checks you are logged in but not that the record belongs to you.</p>
-
-<h2>18.7 Lab</h2>
+<h2>11.5 Lab · read resolv.conf and time the ndots cost yourself</h2>
 
 <div class="lab">
-  <div class="labhead"><span>Shell · audit a site's headers and cookies</span><button data-copy>Copy</button></div>
-<pre><code># Every security-relevant response header, in one shot
-curl -sSI https://example.com | grep -iE \
-  'strict-transport|content-security|x-frame|x-content-type|referrer-policy|permissions-policy|set-cookie|cross-origin'
+  <div class="labhead"><span>Shell · the search list and the queries it actually generates</span><button data-copy>Copy</button></div>
+<pre><code># The exact search list and ndots setting a pod is running with
+kubectl exec -it web-abc -- cat /etc/resolv.conf
 
-# Cookie flags \u2014 look for Secure, HttpOnly and SameSite on EVERY cookie
-curl -sSI https://example.com | grep -i '^set-cookie' | while read -r c; do
-  echo "$c"
-  for f in Secure HttpOnly SameSite; do
-    echo "$c" | grep -qi "$f" && echo "   \u2713 $f" || echo "   \u2717 $f MISSING"
-  done
-done
+# Watch the wasted queries happen, live, against an external name
+kubectl exec -it web-abc -- sh -c "time nslookup api.stripe.com"
+# compare against the absolute form — notice the difference in query count
+kubectl exec -it web-abc -- sh -c "time nslookup api.stripe.com."
 
-# Is HSTS strong enough to be preloaded?
-curl -sSI https://example.com | grep -i strict-transport
-#   Needs: max-age >= 31536000; includeSubDomains; preload
-#   Check status: https://hstspreload.org/?domain=example.com
+# CoreDNS's own query log, if the log plugin is enabled — count NXDOMAINs
+# for names that eventually resolve as external, a direct symptom of this
+kubectl logs -n kube-system -l k8s-app=kube-dns | grep NXDOMAIN | head -20
 
-# Does the site redirect HTTP to HTTPS, and does HSTS then take over?
-curl -sSI http://example.com | head -5
+# A headless Service's full pod-level answer, versus a normal Service's
+# single synthesised address
+kubectl exec -it web-abc -- nslookup web-headless.default.svc.cluster.local
+kubectl exec -it web-abc -- nslookup web.default.svc.cluster.local
 
-# CSP, readably
-curl -sSI https://example.com | grep -i content-security-policy \
-  | tr ';' '\n' | sed 's/^ */  /'
-#   Look for 'unsafe-inline' and 'unsafe-eval' \u2014 both largely defeat the point.
-
-# CORS: is the origin reflected? A reflecting server with credentials is a serious bug.
-curl -sSI -H "Origin: https://evil.example" https://example.com/api/ \
-  | grep -i 'access-control-allow'
-#   Access-Control-Allow-Origin: https://evil.example  +  Allow-Credentials: true
-#   = any site can read authenticated responses. Never reflect arbitrary origins.
-
-# Subresource Integrity on third-party scripts
-curl -sS https://example.com | grep -oE '<script[^>]*src="https://[^"]*"[^>]*>' \
-  | grep -v integrity= | head
-#   Any external script without an integrity attribute is a CDN compromise away
-#   from executing arbitrary code in your origin.
-
-# Server-side: nginx headers worth setting
-cat <<'NGINX'
-add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-add_header Content-Security-Policy   "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
-add_header X-Content-Type-Options    "nosniff" always;
-add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
-add_header Permissions-Policy        "geolocation=(), camera=(), microphone=()" always;
-NGINX</code></pre>
+# Tune ndots per-pod if a workload does heavy external DNS (fixes the
+# cost cluster-wide would require a CoreDNS-level change instead)
+kubectl get pod web-abc -o jsonpath='{.spec.dnsConfig}'</code></pre>
 </div>
 
 <div class="quiz">
   <h3>Knowledge check</h3>
 
   <div class="q" data-answer="2">
-    <p class="qtext">Why are parameterised queries a stronger defence against SQL injection than escaping input?</p>
+    <p class="qtext">Why does resolving <code>api.stripe.com</code> from inside a pod generate more than one DNS query, when the name is fully qualified and obviously external?</p>
     <div class="opts">
-      <button class="opt">They are faster</button>
-      <button class="opt">They encrypt the query in transit</button>
-      <button class="opt">The query structure is fixed before user data is bound, so data can never become structure</button>
-      <button class="opt">They validate data types automatically</button>
+      <button class="opt">CoreDNS always queries every configured upstream in parallel, regardless of the name</button>
+      <button class="opt">The name is cached incorrectly by the pod's local resolver</button>
+      <button class="opt">The name has fewer dots than ndots:5, so the resolver tries every search-domain suffix first, generating several guaranteed-NXDOMAIN queries before finally trying the name as absolute</button>
+      <button class="opt">Kubernetes DNS requires all lookups to be validated against the cluster's own service registry first, regardless of dot count</button>
     </div>
-    <p class="why">Escaping tries to neutralise dangerous characters inside the data, and the attacker gets unlimited attempts at encodings you did not anticipate. Parameterisation removes the parsing step entirely — the database receives a fixed structure plus values, and no value can alter the structure. Same principle as contextual auto-escaping for HTML and argument arrays for shells.</p>
+    <p class="why">ndots:5 makes the decision purely on dot count, with no awareness of whether a name is "obviously" external. api.stripe.com has 2 dots, well under 5, so it's treated identically to a bare cluster Service name — search suffixes first, absolute form only as a last resort.</p>
   </div>
 
   <div class="q" data-answer="0">
-    <p class="qtext">What does <code>HttpOnly</code> on a session cookie prevent?</p>
+    <p class="qtext">What is the one change to a hostname string, in application code, that skips the search-domain list entirely and always resolves in exactly one query?</p>
     <div class="opts">
-      <button class="opt">JavaScript reading the cookie, so XSS cannot exfiltrate the session directly</button>
-      <button class="opt">The cookie being sent over plain HTTP</button>
-      <button class="opt">The cookie being sent on cross-site requests</button>
-      <button class="opt">The cookie being stored on disk</button>
+      <button class="opt">Adding a trailing dot, making the name absolute — ndots and the search list are both bypassed for an absolute name</button>
+      <button class="opt">Prefixing the name with the cluster domain manually</button>
+      <button class="opt">Increasing ndots in the pod's dnsConfig to a very large number</button>
+      <button class="opt">There is no code-level fix; this must be solved at the CoreDNS level</button>
     </div>
-    <p class="why">It blocks <code>document.cookie</code> access. Note what it does <em>not</em> do: injected script can still make authenticated requests from within the page, because the browser attaches the cookie automatically. HttpOnly limits exfiltration, not abuse. The other three options describe Secure and SameSite.</p>
+    <p class="why">A trailing dot marks a name as already fully qualified/absolute, which every standard resolver treats as exempt from search-list expansion regardless of the ndots setting. It's the cheapest possible fix, since it requires no cluster-level configuration change at all — just a different string in the code doing the lookup.</p>
   </div>
 
   <div class="q" data-answer="3">
-    <p class="qtext">An application fetches user-supplied URLs to generate link previews. What is the highest-value defence?</p>
+    <p class="qtext">A Service is created with clusterIP: None. What does a DNS query for its name return, compared to a normal Service?</p>
     <div class="opts">
-      <button class="opt">Blocking URLs containing "169.254.169.254"</button>
-      <button class="opt">Validating that the URL uses HTTPS</button>
-      <button class="opt">Rate limiting the endpoint</button>
-      <button class="opt">Egress network policy preventing that workload from reaching internal ranges or the metadata endpoint at all</button>
+      <button class="opt">An NXDOMAIN — headless Services aren't resolvable by name at all</button>
+      <button class="opt">The same single synthesised ClusterIP address as any other Service</button>
+      <button class="opt">The IP of whichever backend pod was created first, permanently</button>
+      <button class="opt">Every backing pod's real IP directly, as a set of A records, rather than one load-balanced virtual address</button>
     </div>
-    <p class="why">String blocklists are bypassed by DNS rebinding, redirects, IPv6 forms and decimal or octal encodings — the attacker controls the search space. A network control does not depend on parsing the URL correctly and holds even when the code is wrong. Combine with an allowlist and IMDSv2 where possible.</p>
+    <p class="why">A headless Service opts out of the ClusterIP fiction from Chapter 10 entirely. CoreDNS answers with the actual pod IPs themselves — which is exactly what lets a StatefulSet's per-ordinal DNS names resolve to a specific, stable pod rather than to an anonymous load-balanced target.</p>
   </div>
 
   <div class="q" data-answer="1">
-    <p class="qtext">Which vulnerability category is consistently the most common in the OWASP Top 10?</p>
+    <p class="qtext">Why can a newly created Service be resolved by name immediately, with no propagation delay comparable to, say, waiting for a Deployment's pods to become Ready?</p>
     <div class="opts">
-      <button class="opt">Cryptographic failures</button>
-      <button class="opt">Broken access control</button>
-      <button class="opt">Injection</button>
-      <button class="opt">Security misconfiguration</button>
+      <button class="opt">CoreDNS pre-generates records for every possible future Service name in advance</button>
+      <button class="opt">CoreDNS is itself a controller that watches Services/EndpointSlices and synthesises DNS answers from live cluster state at query time, rather than from a pre-populated zone file</button>
+      <button class="opt">Kubernetes DNS bypasses the API server and reads etcd directly for lower latency</button>
+      <button class="opt">Service names are resolved client-side without contacting CoreDNS at all</button>
     </div>
-    <p class="why">It is rarely exotic — usually an endpoint that verifies you are authenticated but not that the record you asked for is yours. No cryptography involved, no clever payload, just a missing check. Authorisation must be enforced server-side, on every request, against the specific object being accessed.</p>
+    <p class="why">CoreDNS follows the same watch-and-react shape as every other controller in this course — it isn't serving from a static table someone updates, so there's no separate "publish the DNS record" step lagging behind object creation. The record exists as soon as CoreDNS's own view of the Service object does.</p>
   </div>
 </div>
 
-<h2>18.8 Carry forward</h2>
+<h2>11.6 What to carry into Chapter 12</h2>
 <ul>
-<li>Most web vulnerabilities are attacker data crossing a boundary and being interpreted as structure.</li>
-<li>Separate data from structure at the interface. Filtering is a losing game.</li>
-<li>Escaping is context-dependent; use an auto-escaping template engine.</li>
-<li>Headers and cookie flags are cheap layers that fail independently of your code.</li>
-<li>SameSite removed most CSRF but is not a substitute for tokens on state-changing routes.</li>
-<li>SSRF is best solved at the network, not in the URL parser.</li>
-<li>Broken access control is the biggest category, and it is usually a missing check.</li>
+<li>CoreDNS is a controller, not a static zone file — it synthesises answers from live Service/EndpointSlice state, the same watch-driven shape as every other controller in this course.</li>
+<li>The search domain list is what makes bare names like <code>web</code> resolve, but it applies indiscriminately to any name under the ndots threshold — including obviously external ones.</li>
+<li>ndots:5 counts dots, not "is this a cluster name" — an external FQDN with fewer than 5 dots pays for every search suffix before its real answer.</li>
+<li>A trailing dot makes a name absolute and skips the search list entirely — the cheapest fix available at the application layer.</li>
+<li>A headless Service (clusterIP: None) returns real pod IPs directly instead of one synthesised address, which is the mechanism behind StatefulSets' stable per-pod names.</li>
 </ul>
+
+<p>Everything through this chapter has been traffic that starts and ends inside the cluster. The next chapter is the piece that actually lets something outside — a browser on the internet — reach a Service at all, and everything that has to happen to a request between arriving at the cluster's edge and landing on this same ClusterIP machinery.</p>
 
 <div class="donebar"></div>
 <nav class="chapfoot"></nav>
 </div>
 </main>
 </div>
-
-<script>
-(function(){
-  var H = [
-    { id:'hsts', label:'HSTS',
-      hdr:'Strict-Transport-Security: max-age=63072000; includeSubDomains; preload',
-      t:'HTTP Strict Transport Security',
-      on:'The browser refuses plaintext HTTP for this host for two years, upgrading every request before it leaves the machine. This kills <strong>SSL stripping</strong> (Ch. 2), where an attacker intercepts the initial HTTP request and keeps the victim on plaintext while speaking HTTPS to the server \u2014 the padlock simply never appears and most users never look.<br><br><code>preload</code> submits the domain to a list compiled into browsers, closing the one remaining gap: the very first visit, before any HSTS header has been seen. <span style="color:#E8A317">Preloading is hard to reverse</span> \u2014 removal takes months to propagate \u2014 so be certain every subdomain can serve HTTPS first.',
-      off:'<span style="color:#C1121F">Without it, the first request is plaintext.</span> A user typing <code>bank.example</code> sends an HTTP request that an on-path attacker intercepts, and SSL stripping proceeds from there. Your redirect to HTTPS is itself unprotected \u2014 the attacker simply does not deliver it.' },
-
-    { id:'csp', label:'CSP',
-      hdr:"Content-Security-Policy: default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-      t:'Content Security Policy',
-      on:'Declares which sources may load and execute. Injected <code>&lt;script src="//evil.example"&gt;</code> is blocked, and with a nonce- or hash-based policy inline script is blocked too \u2014 which is most XSS payloads.<br><br>CSP does not fix XSS; it limits what a successful XSS can do. <code>base-uri \'none\'</code> stops an injected <code>&lt;base&gt;</code> tag redirecting every relative URL. <code>frame-ancestors \'none\'</code> replaces X-Frame-Options.<br><br><span style="color:#E8A317">A policy containing <code>\'unsafe-inline\'</code> gives up most of the benefit.</span> Deploy with <code>Content-Security-Policy-Report-Only</code> first and read the reports before enforcing.',
-      off:'<span style="color:#C1121F">Any successful injection runs with the full authority of your origin.</span> It can read the DOM, read non-HttpOnly cookies, make authenticated requests, rewrite the page and exfiltrate anywhere. CSP is the difference between an XSS bug and an XSS incident.' },
-
-    { id:'secure', label:'Cookie: Secure',
-      hdr:'Set-Cookie: session=\u2026; Secure',
-      t:'Secure cookie flag',
-      on:'The cookie is only ever transmitted over HTTPS. Without it, a single plaintext request \u2014 a stray <code>http://</code> link, an image, a redirect that fires before HSTS applies \u2014 sends the session cookie in the clear to anyone on the path.',
-      off:'<span style="color:#C1121F">One plaintext request leaks the session.</span> It need not be a page load: an <code>&lt;img src="http://your-site/x"&gt;</code> on any page the user visits is enough to make their browser send the cookie unencrypted.' },
-
-    { id:'httponly', label:'Cookie: HttpOnly',
-      hdr:'Set-Cookie: session=\u2026; HttpOnly',
-      t:'HttpOnly cookie flag',
-      on:'JavaScript cannot read the cookie via <code>document.cookie</code>, so an XSS payload cannot simply exfiltrate the session to an attacker\u2019s server.<br><br><span style="color:#E8A317">Understand the limit.</span> Injected script can still <em>use</em> the session, because the browser attaches the cookie to requests automatically. HttpOnly stops the attacker taking the session away with them; it does not stop them acting as the user while the page is open. That is a meaningful difference \u2014 it turns a persistent compromise into a transient one \u2014 but it is not a fix for XSS.',
-      off:'<span style="color:#C1121F">Any XSS becomes full session theft.</span> Three lines of injected script send the cookie to an attacker-controlled endpoint, and they then have the session from their own machine, indefinitely.' },
-
-    { id:'samesite', label:'Cookie: SameSite=Lax',
-      hdr:'Set-Cookie: session=\u2026; SameSite=Lax',
-      t:'SameSite cookie attribute',
-      on:'The cookie is not sent on cross-site POSTs, which removes most <strong>CSRF</strong>. A form on <code>evil.example</code> posting to your transfer endpoint now arrives unauthenticated.<br><br><code>Lax</code> deliberately still sends cookies on top-level GET navigations, so links from other sites keep working \u2014 which is exactly why <strong>a GET must never change state</strong>. <code>Strict</code> blocks those too, at the cost of users arriving from external links appearing logged out.<br><br>Browsers default to Lax now, but keep a synchroniser token: the default does not cover older clients, deliberate <code>SameSite=None</code> flows, or GET-based state changes.',
-      off:'<span style="color:#C1121F">Cross-site requests carry full credentials.</span> Any page the user visits can submit an authenticated form to your application, and your server cannot distinguish it from a legitimate one.' },
-
-    { id:'nosniff', label:'X-Content-Type-Options',
-      hdr:'X-Content-Type-Options: nosniff',
-      t:'MIME sniffing prevention',
-      on:'The browser honours the declared <code>Content-Type</code> instead of guessing from content. Without it, a file you serve as <code>text/plain</code> that happens to contain markup can be interpreted as HTML and executed in your origin \u2014 turning a benign file upload into stored XSS.',
-      off:'<span style="color:#E8A317">Uploaded files can be reinterpreted.</span> A user-supplied file served from your domain may execute as HTML or script regardless of the type you set. Serve user content from a separate origin as well, so even a successful sniff lands somewhere harmless.' },
-
-    { id:'referrer', label:'Referrer-Policy',
-      hdr:'Referrer-Policy: strict-origin-when-cross-origin',
-      t:'Referrer policy',
-      on:'Cross-origin requests send only your origin, not the full path and query string. Without it, a password-reset URL or a document link with a token leaks to every third-party asset the page loads, and into their logs.',
-      off:'<span style="color:#E8A317">Full URLs leak to third parties.</span> Any analytics script, font, or embedded image receives the complete URL of the page the user was on \u2014 including tokens, record IDs and search terms sitting in the query string.' }
-  ];
-
-  var state = {};
-  H.forEach(function(h){ state[h.id]=false; });
-
-  var ctl=document.getElementById('whctl');
-  H.forEach(function(h){
-    var b=document.createElement('button');
-    b.className='chip'; b.textContent=h.label; b.dataset.h=h.id;
-    ctl.appendChild(b);
-  });
-  var all=document.createElement('button');
-  all.className='chip'; all.id='whall'; all.textContent='Enable all';
-  all.style.marginLeft='10px'; ctl.appendChild(all);
-
-  function render(sel){
-    var on = H.filter(function(h){ return state[h.id]; });
-    document.getElementById('whstat').textContent = on.length+' of '+H.length+' enabled';
-    document.getElementById('whstat').style.color = on.length===H.length ? '#0B8A5B' : (on.length===0?'#C1121F':'#4A4F58');
-
-    document.getElementById('whresp').innerHTML =
-      '<span style="color:#4A4F58">HTTP/2 200</span><br>' +
-      (on.length
-        ? on.map(function(h){
-            var p=h.hdr.split(': ');
-            return '<span style="color:#1B4FD8">'+p[0]+'</span>: '+p.slice(1).join(': ');
-          }).join('<br>')
-        : '<span style="color:#C1121F">(no security headers set)</span>') +
-      '<br><span style="color:#4A4F58">content-type: text/html</span>';
-
-    var h = sel ? H.filter(function(x){return x.id===sel;})[0] : null;
-    if(!h){
-      document.getElementById('whout').innerHTML = on.length===H.length
-        ? '<span style="color:#0B8A5B"><strong>All seven set.</strong></span> None of these fixes a vulnerability \u2014 they bound what an attacker can do once one exists. That is the whole defence-in-depth argument from Chapter 1, and it only counts because these controls fail independently of your application code: a missing authorisation check does not disable CSP, and an XSS bug does not clear the HttpOnly flag.<br><br>Click any header above for what it specifically buys you.'
-        : 'Click any header or flag above to see what it does, and what happens without it. Toggle them to build a response.';
-      document.getElementById('whout').style.borderLeft='';
-      return;
-    }
-    var isOn = state[h.id];
-    document.getElementById('whout').innerHTML =
-      '<strong>'+h.t+'</strong> &nbsp;<span style="font-family:var(--mono);font-size:11px;color:'+(isOn?'#0B8A5B':'#C1121F')+'">'+(isOn?'ENABLED':'NOT SET')+'</span><br><br>'+
-      (isOn ? h.on : h.off);
-    document.getElementById('whout').style.borderLeft='3px solid '+(isOn?'#0B8A5B':'#C1121F');
-  }
-
-  ctl.addEventListener('click',function(e){
-    var b=e.target.closest('[data-h]');
-    if(b){
-      state[b.dataset.h] = !state[b.dataset.h];
-      b.classList.toggle('on', state[b.dataset.h]);
-      render(b.dataset.h);
-      return;
-    }
-    if(e.target.id==='whall'){
-      var allOn = H.every(function(h){ return state[h.id]; });
-      H.forEach(function(h){ state[h.id] = !allOn; });
-      ctl.querySelectorAll('[data-h]').forEach(function(x){ x.classList.toggle('on', !allOn); });
-      e.target.textContent = allOn ? 'Enable all' : 'Clear all';
-      render(null);
-    }
-  });
-
-  render(null);
-})();
-</script>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -1070,7 +932,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "the-wire"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
