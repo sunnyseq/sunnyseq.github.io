@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Under the Hood — Linux internals</title>
+<title>19 · Autoscaling — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,206 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="19">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part V &nbsp;&middot;&nbsp; Workloads &nbsp;&middot;&nbsp; Chapter 19</p>
+  <h1>Autoscaling</h1>
+  <p class="lede">The Horizontal Pod Autoscaler's entire decision is one memoryless ratio, recomputed from nothing every fifteen seconds. This chapter is that formula, the asymmetric window that keeps it from oscillating, and the two other autoscalers that can either help it or fight it.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>19.1 The HPA's entire algorithm is one ratio</h2>
+
+<p>The Horizontal Pod Autoscaler looks, from the outside, like it might involve something sophisticated — trend analysis, prediction, machine learning. It doesn't. Its core loop, run roughly every 15 seconds, is one formula:</p>
+
+<pre><code>desiredReplicas = ceil( currentReplicas × ( currentMetricValue / desiredMetricValue ) )</code></pre>
+
+<p>Running at 70% average CPU against a 50% target, with 4 replicas: <code>ceil(4 × (70/50)) = ceil(5.6) = 6</code>. That's the whole decision. Everything else the HPA does — reading metrics from the metrics API, handling multiple metrics, respecting min/max bounds — is plumbing around this one line. There is no momentum, no trend extrapolation, no awareness of whether load is rising or falling; every evaluation is a fresh, memoryless computation from whatever the current metric value happens to be at that instant.</p>
+
+<h2>19.2 Stabilization windows exist because the formula has no memory of its own</h2>
+
+<p>A formula with no memory, evaluated every 15 seconds against a genuinely noisy metric, will oscillate — scale up, then immediately scale back down as the newly added replicas dilute the average, then back up again as load catches up, forever. The <strong>stabilization window</strong> is the fix, and it's worth being precise about what it actually does: it does not smooth or average the metric. It looks back over the window (default 5 minutes for scale-down, 0 for scale-up) at every desired-replica-count the algorithm computed during that period, and picks the <em>highest</em> one for scale-down decisions.</p>
+
+<div class="callout">
+  <span class="tag">Why scale-down and scale-up default so differently</span>
+  <p>Scaling up defaults to no stabilization at all — reacting to a genuine traffic spike immediately is usually the right call, and the cost of a slightly premature scale-up is small (a bit of wasted capacity for a few minutes). Scaling down defaults to a 5-minute look-back specifically because the cost of scaling down too eagerly is asymmetric: removing capacity right before load returns means real request failures, not wasted spend. Picking the highest recent desired-count over the window means a brief dip in load doesn't trigger a scale-down until that dip has genuinely persisted across the entire window — one noisy low reading can't do it alone.</p>
 </div>
 
-<div id="toc"></div>
+<h2>19.3 Watch the formula react, then watch stabilization damp it</h2>
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+<div class="demo">
+  <div class="demohead"><span>Interactive · HPA loop, target 50% CPU</span><span id="hpareplicas">4 replicas</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>Current avg CPU%</label>
+      <button class="chip" data-cpu="30">30%</button>
+      <button class="chip on" data-cpu="70">70%</button>
+      <button class="chip" data-cpu="90">90%</button>
+      <button class="chip" id="hpatick">Run one evaluation (every ~15s in real life)</button>
+      <button class="chip" id="hpareset">Reset</button>
+    </div>
+    <div class="out" id="hpalog" style="max-height:200px;overflow-y:auto"></div>
+  </div>
+  <div class="demonote">Push CPU to 90%, tick a few times, then drop it to 30% and keep ticking — notice replicas do not immediately fall. The scale-down stabilization window is holding onto the highest recent desired count until 5 minutes of sustained lower load has actually passed.</div>
+</div>
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+<script>
+(function(){
+  var current = 4, cpu = 70, history = []; // history: {t, desired}
+  var simTime = 0;
+  var replicasEl = document.getElementById('hpareplicas');
+  var log = document.getElementById('hpalog');
+  function line(t){ var d=document.createElement('div'); d.innerHTML=t; log.insertBefore(d, log.firstChild); }
 
+  document.querySelectorAll('[data-cpu]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('[data-cpu]').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on'); cpu = +b.dataset.cpu;
+    });
+  });
+
+  document.getElementById('hpatick').addEventListener('click', function(){
+    simTime += 15;
+    var raw = Math.ceil(current * (cpu / 50));
+    raw = Math.max(1, raw);
+    history.push({t: simTime, desired: raw});
+    history = history.filter(function(h){ return simTime - h.t <= 300; }); // 5 min window
+
+    var stabilizedDesired = raw;
+    if (raw < current) {
+      // scale-down: use the HIGHEST desired value seen in the stabilization window
+      stabilizedDesired = Math.max.apply(null, history.map(function(h){ return h.desired; }));
+    }
+
+    var msg = 't+' + simTime + 's &middot; CPU=' + cpu + '% &middot; raw formula: ceil(' + current + ' &times; ' + cpu + '/50) = ' + raw;
+    if (stabilizedDesired !== raw) {
+      msg += ' &middot; but scale-down stabilization holds at <strong>' + stabilizedDesired + '</strong> (highest desired count in the last 5 min of history)';
+    }
+    if (stabilizedDesired !== current) {
+      msg += ' &rarr; <strong style="color:' + (stabilizedDesired > current ? '#E2622A' : '#0F6E8C') + '">scaling ' + (stabilizedDesired > current ? 'up' : 'down') + ' to ' + stabilizedDesired + '</strong>';
+      current = stabilizedDesired;
+    } else {
+      msg += ' &middot; no change';
+    }
+    line(msg);
+    replicasEl.textContent = current + ' replicas';
+  });
+
+  document.getElementById('hpareset').addEventListener('click', function(){
+    current = 4; cpu = 70; history = []; simTime = 0;
+    log.innerHTML = ''; replicasEl.textContent = '4 replicas';
+    document.querySelectorAll('[data-cpu]').forEach(function(x){x.classList.remove('on');});
+    document.querySelector('[data-cpu="70"]').classList.add('on');
+  });
+})();
+</script>
+
+<h2>19.4 VPA and HPA on the same metric is a fight, not a team</h2>
+
+<p>The Vertical Pod Autoscaler adjusts a container's requests and limits — the numbers from Chapter 18 — rather than replica count. Point both a VPA and an HPA at the same resource (CPU, say) on the same workload, and they actively work against each other: the HPA wants more replicas as average CPU utilization rises, while a VPA in its default update mode evicts and recreates pods with larger CPU requests to bring utilization back down per-pod — which lowers the very percentage the HPA is reacting to, potentially triggering a scale-down at the same moment the VPA is scaling pods up individually. Running both safely means splitting responsibility strictly: HPA on CPU/memory, VPA on some other resource entirely, or VPA in a recommendation-only mode that never actually touches running pods.</p>
+
+<h2>19.5 Node autoscaling is a different loop entirely, waiting on Pending</h2>
+
+<p>Everything above assumes the cluster already has room. A <strong>cluster autoscaler</strong> (or Karpenter, or a cloud-specific equivalent) solves a different problem, on a different trigger: it watches for pods stuck <code>Pending</code> because no existing node has room, and provisions a new node — or, on scale-down, removes a node whose pods could all be safely rescheduled elsewhere. This is a distinct control loop from the HPA's, on a much slower cycle (minutes, not seconds, since provisioning real infrastructure takes real time), and it's the piece that makes horizontal pod autoscaling actually work at the edges: an HPA can decide it wants ten more replicas instantly, but if the cluster has no room, those pods sit Pending until node autoscaling — a separate system, on a separate clock — catches up.</p>
+
+<h2>19.6 Lab · watch the HPA's actual decisions, not just its config</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · the algorithm, the window, and the two loops meeting</span><button data-copy>Copy</button></div>
+<pre><code># The HPA's own account of its last decision - current vs target,
+# and the actual desired count it computed
+kubectl get hpa web -o jsonpath='{.status.currentMetrics}'
+kubectl describe hpa web | grep -A5 Events
+
+# Confirm the stabilization windows actually configured
+kubectl get hpa web -o jsonpath='{.spec.behavior}'
+
+# Watch replica count over time and correlate it with metric changes -
+# the log is the real evidence, better than reasoning about it in the abstract
+kubectl get hpa web -w
+
+# Confirm a VPA isn't fighting an HPA on the same resource
+kubectl get vpa -A -o jsonpath='{.items[*].spec.targetRef.name}'
+kubectl get vpa web-vpa -o jsonpath='{.spec.updatePolicy.updateMode}'
+#   "Off" = recommendation only, safe to run alongside an HPA on the same metric
+
+# See node-level autoscaling waiting on Pending pods specifically
+kubectl get pods --field-selector=status.phase=Pending
+kubectl describe pod <pending-pod> | grep -A3 Events
+#   ... TriggeredScaleUp ...  <- the cluster autoscaler's own event, a separate
+#                                loop from the HPA entirely</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">An HPA targets 50% CPU utilization and currently runs 4 replicas at 70% average CPU. Using the core formula alone, what does it compute as the desired replica count?</p>
+    <div class="opts">
+      <button class="opt">5, rounding to the nearest whole replica</button>
+      <button class="opt">7, since utilization is 70%</button>
+      <button class="opt">6, from ceil(4 &times; 70/50) = ceil(5.6)</button>
+      <button class="opt">4, since the difference is within a normal tolerance band</button>
+    </div>
+    <p class="why">The formula is exactly desiredReplicas = ceil(currentReplicas × currentValue/targetValue). Plugging in 4 × (70/50) = 5.6, rounded up, gives 6 — there's no additional smoothing or tolerance applied in the base calculation itself.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">Why does the HPA's default scale-down stabilization window (5 minutes) differ so much from its default scale-up window (0, immediate)?</p>
+    <div class="opts">
+      <button class="opt">The cost of the two mistakes is asymmetric — scaling up too eagerly wastes some capacity briefly, while scaling down too eagerly can cause real request failures right as load returns, so scale-down is deliberately more conservative</button>
+      <button class="opt">Scale-up requires provisioning new nodes, which scale-down does not, so it needs less caution</button>
+      <button class="opt">This is a configuration bug most clusters override</button>
+      <button class="opt">Scale-down stabilization is unrelated to caution and exists purely to reduce API server load</button>
+    </div>
+    <p class="why">This is a deliberate, sensible default reflecting which mistake is worse. Reacting instantly to a spike costs a little unused capacity; reacting instantly to a dip and removing capacity right before load returns costs actual dropped or slow requests — hence the built-in asymmetry.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">A VPA (in its default, active update mode) and an HPA are both configured to react to a Deployment's CPU usage. What is the likely outcome?</p>
+    <div class="opts">
+      <button class="opt">They cooperate automatically — Kubernetes detects the overlap and disables one</button>
+      <button class="opt">The VPA takes priority and the HPA's scaling decisions are ignored</button>
+      <button class="opt">Nothing unusual — both mechanisms scale different dimensions and never interact</button>
+      <button class="opt">They actively counteract each other — the VPA raising per-pod CPU requests lowers the utilization percentage the HPA is reacting to, potentially triggering a scale-down right as the VPA is adjusting pods upward</button>
+    </div>
+    <p class="why">Both mechanisms ultimately key off the same underlying metric here, just acting on different knobs (replica count vs. per-pod resource requests). Without deliberately separating what each reacts to — or running the VPA in recommendation-only mode — their independent reactions to the same signal can visibly conflict.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">An HPA decides it needs 6 more replicas immediately, but the cluster has no spare node capacity. What happens?</p>
+    <div class="opts">
+      <button class="opt">The HPA's decision is rejected and it retries with a smaller number</button>
+      <button class="opt">The new pods are created but sit Pending until a separate system — the cluster/node autoscaler, running its own much slower loop — provisions additional node capacity</button>
+      <button class="opt">Existing pods are evicted to make room automatically</button>
+      <button class="opt">The HPA and node autoscaler are the same control loop, so this cannot happen</button>
+    </div>
+    <p class="why">The HPA's job ends at "create this many pods" — it has no awareness of node capacity at all. Getting those pods actually running when there's no room is an entirely separate control loop, on a much slower cycle since it involves provisioning real infrastructure, which is exactly why a sudden HPA-driven scale-up can still leave pods Pending for a real stretch of time.</p>
+  </div>
+</div>
+
+<h2>19.7 What to carry into Chapter 20</h2>
+<ul>
+<li>The HPA's core decision is one memoryless ratio, recomputed from scratch every evaluation — all its sophistication is in the plumbing around that one formula, not the formula itself.</li>
+<li>Stabilization windows pick the highest recent desired count over a look-back period for scale-down, deliberately asymmetric with immediate scale-up, because the two mistakes cost differently.</li>
+<li>VPA and HPA reacting to the same metric fight each other; splitting responsibility or using VPA's recommendation-only mode avoids it.</li>
+<li>Node autoscaling is a separate, slower loop triggered by Pending pods — the HPA can want capacity instantly that the cluster genuinely does not have yet.</li>
+</ul>
+
+<p>Part V ends here, with the mechanics of running and scaling a workload well understood. Part VI turns to operating the cluster itself — starting with the identity and authorization model behind every one of the <code>kubectl</code> commands this course has been running all along.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +942,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1164,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>

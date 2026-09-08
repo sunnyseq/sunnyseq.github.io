@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Under the Hood — Linux internals</title>
+<title>18 · Requests, limits and QoS — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,213 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="18">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part V &nbsp;&middot;&nbsp; Workloads &nbsp;&middot;&nbsp; Chapter 18</p>
+  <h1>Requests, limits and QoS</h1>
+  <p class="lede">Requests and limits look like a matched pair and are read by two different components at two different times for two different reasons. This chapter is that split, why a CPU limit and a memory limit fail in completely different ways, and the QoS class you never set directly but always earn.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>18.1 Two numbers, two completely different jobs</h2>
+
+<p>It's easy to read <code>requests</code> and <code>limits</code> as "the minimum and maximum of the same thing," and that reading is wrong in a way that causes real production incidents. They are consumed by two entirely different components, at two entirely different times, for two entirely different purposes.</p>
+
+<table>
+<thead><tr><th></th><th>requests</th><th>limits</th></tr></thead>
+<tbody>
+<tr><td>Read by</td><td>The scheduler (Chapter 5), once, at placement time</td><td>The kubelet and container runtime, continuously, for the pod's entire life</td></tr>
+<tr><td>Answers</td><td>"Which nodes have enough room to even consider this pod?"</td><td>"How much is this container allowed to actually use, right now?"</td></tr>
+<tr><td>Enforced by</td><td>Nothing, after scheduling — it's a scheduling-time input, not a running constraint</td><td>cgroups, continuously, at the kernel level</td></tr>
+</tbody>
+</table>
+
+<p>A pod's <code>requests</code> never limit anything about its actual runtime behaviour — they only ever decided which node it was allowed to land on. Once scheduled, a container can use far more than its request (up to its limit, if one exists, or without bound if it doesn't) — this is not a bug, it's the entire mechanism behind bin-packing a cluster efficiently, trading on the statistical reality that most containers most of the time use less than they request.</p>
+
+<h2>18.2 CPU throttles; memory kills — and that asymmetry is not a design choice</h2>
+
+<p>Hitting a limit means something completely different depending on which resource it is, and the reason is physical, not a Kubernetes design decision: CPU time can be taken away and given back; memory that's already been written to cannot be un-written without losing it.</p>
+
+<table>
+<thead><tr><th>Resource</th><th>At the limit</th><th>Mechanism</th></tr></thead>
+<tbody>
+<tr><td>CPU</td><td>Throttled — the process keeps running, just slower</td><td>The kernel's CFS bandwidth controller allocates a quota per period and simply stops scheduling the process's threads once that period's quota is exhausted, resuming next period</td></tr>
+<tr><td>Memory</td><td>OOMKilled — the process is terminated, immediately, no negotiation</td><td>The kernel cannot partially revoke memory a process is actively using; the only lever is ending the process that's holding it</td></tr>
+</tbody>
+</table>
+
+<p>This asymmetry has a direct operational consequence: a CPU limit set too tight produces a slow, degraded, but alive application — visible in latency graphs, survivable, debuggable while it's happening. A memory limit set too tight produces a dead container and a restart, with a specific, greppable signal (<code>OOMKilled</code>, exit code 137) rather than a gradual symptom. Sizing memory limits deserves more caution than sizing CPU limits precisely because getting memory wrong is instantly fatal and getting CPU wrong is merely unpleasant.</p>
+
+<h2>18.3 QoS class: derived, not declared</h2>
+
+<p>There is no <code>qosClass</code> field anywhere in a pod spec. The kubelet computes it, once, from the shape of a pod's requests and limits across every container, and the class it lands on is exactly what decided eviction order back in Chapter 7.</p>
+
+<table>
+<thead><tr><th>Class</th><th>Condition</th></tr></thead>
+<tbody>
+<tr><td><strong>Guaranteed</strong></td><td>Every container specifies both requests and limits for both CPU and memory, and for each resource, request equals limit exactly</td></tr>
+<tr><td><strong>Burstable</strong></td><td>At least one container specifies a request or limit for CPU or memory, but the pod doesn't qualify as Guaranteed</td></tr>
+<tr><td><strong>BestEffort</strong></td><td>No container specifies any request or limit for anything, at all</td></tr>
+</tbody>
+</table>
+
+<p>Guaranteed is not a privilege you request — it's a mechanical consequence of setting request equal to limit on everything. That equality is what tells the kubelet this pod's resource footprint is fully predictable and will never grow beyond what it was scheduled with, which is precisely the property that makes it safe to protect last under memory pressure.</p>
+
+<h2>18.4 Watch a pod's shape decide its class, then its class decide its fate</h2>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · requests/limits &rarr; QoS &rarr; eviction order</span><span id="qosclass">—</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>CPU request</label><input type="text" id="qcr" value="500m" style="width:70px">
+      <label>CPU limit</label><input type="text" id="qcl" value="500m" style="width:70px">
+      <label>Mem request</label><input type="text" id="qmr" value="256Mi" style="width:70px">
+      <label>Mem limit</label><input type="text" id="qml" value="256Mi" style="width:70px">
+      <button class="chip" id="qgo">Compute QoS class</button>
+    </div>
+    <div class="out" id="qout">Guaranteed: every request equals its limit, for both CPU and memory. Try clearing a field, or making limit &gt; request.</div>
+  </div>
+  <div class="demonote">Clear all four fields for BestEffort. Set only some fields, or set a limit higher than its request, for Burstable. Set every request exactly equal to every limit for Guaranteed — and notice it takes just one mismatched pair to drop out of it.</div>
 </div>
 
-<div id="toc"></div>
+<script>
+(function(){
+  function compute(){
+    var cr = document.getElementById('qcr').value.trim();
+    var cl = document.getElementById('qcl').value.trim();
+    var mr = document.getElementById('qmr').value.trim();
+    var ml = document.getElementById('qml').value.trim();
+    var any = cr || cl || mr || ml;
+    var out = document.getElementById('qout');
+    var cls = document.getElementById('qosclass');
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+    if (!any) {
+      cls.textContent = 'BestEffort';
+      out.innerHTML = '<strong>BestEffort</strong> &mdash; no requests or limits set at all. This pod is evicted first under any resource pressure, and the scheduler treats it as needing essentially zero room.';
+      return;
+    }
+    var haveAllFour = cr && cl && mr && ml;
+    var cpuEq = cr && cl && cr === cl;
+    var memEq = mr && ml && mr === ml;
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+    if (haveAllFour && cpuEq && memEq) {
+      cls.textContent = 'Guaranteed';
+      out.innerHTML = '<strong>Guaranteed</strong> &mdash; every request exactly equals its limit, for both CPU and memory. Evicted last; the kubelet treats this footprint as fixed and fully predictable.';
+    } else {
+      cls.textContent = 'Burstable';
+      var why = [];
+      if (!haveAllFour) why.push('not every field is set');
+      if (haveAllFour && !cpuEq) why.push('CPU request (' + cr + ') ≠ CPU limit (' + cl + ')');
+      if (haveAllFour && !memEq) why.push('memory request (' + mr + ') ≠ memory limit (' + ml + ')');
+      out.innerHTML = '<strong>Burstable</strong> &mdash; ' + (why.join(' and ') || 'some requests/limits are set') + '. Evicted after BestEffort, before Guaranteed, roughly in order of how far actual usage exceeds requests.';
+    }
+  }
+  document.getElementById('qgo').addEventListener('click', compute);
+  compute();
+})();
+</script>
 
+<h2>18.5 Lab · read the actual enforcement, not just the spec</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · from YAML fields to cgroup files to real behaviour</span><button data-copy>Copy</button></div>
+<pre><code># The computed QoS class - not something you set, only something you read
+kubectl get pod web-abc -o jsonpath='{.status.qosClass}'
+
+# CPU throttling, measured directly - a nonzero throttled count means
+# this container has actually hit its CPU limit, repeatedly
+kubectl exec web-abc -- cat /sys/fs/cgroup/cpu.stat | grep throttled
+
+# The exact signal a memory-limit death leaves behind
+kubectl get pod web-abc -o jsonpath='{.status.containerStatuses[0].lastState.terminated}'
+#   reason: OOMKilled, exitCode: 137
+
+# Confirm what the container's cgroup actually enforces, versus what
+# the YAML merely requested
+kubectl exec web-abc -- cat /sys/fs/cgroup/memory.max
+kubectl exec web-abc -- cat /sys/fs/cgroup/cpu.max
+
+# See requests versus real usage side by side - the gap between them
+# is exactly the bin-packing headroom the cluster is relying on
+kubectl describe node node-3 | grep -A5 "Allocated resources"
+kubectl top pods
+
+# Deliberately trigger throttling to see it, not just read about it
+kubectl run cpu-hog --image=polinux/stress --limits=cpu=100m \
+  -- stress --cpu 1
+kubectl exec cpu-hog -- cat /sys/fs/cgroup/cpu.stat | grep throttled_time</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">A pod's container is using 300m CPU against a 500m request on a node that's otherwise full. What, if anything, stops it from using more?</p>
+    <div class="opts">
+      <button class="opt">The scheduler actively monitors and enforces the request in real time</button>
+      <button class="opt">Nothing — requests are purely advisory once a pod is running</button>
+      <button class="opt">Nothing enforces the request at runtime at all — requests only ever affected which node the scheduler considered suitable; if this container has no CPU limit, it can use however much CPU is actually available on the node</button>
+      <button class="opt">The kubelet throttles it back down to exactly its request</button>
+    </div>
+    <p class="why">Requests are a scheduling-time input only. Once a pod is running, nothing about its request field constrains its actual resource consumption — that job belongs entirely to limits, enforced by cgroups, and if no limit is set, there is no ceiling at all beyond the node's real physical capacity.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">A container exceeds its CPU limit versus exceeding its memory limit. Why do these produce such different outcomes?</p>
+    <div class="opts">
+      <button class="opt">This is an inconsistency in Kubernetes that's planned to be unified in a future version</button>
+      <button class="opt">CPU time can be revoked and returned without losing anything; memory already written to cannot be partially reclaimed without destroying data, so the kernel's only lever for memory is ending the process</button>
+      <button class="opt">Memory limits are only advisory by default, unlike CPU limits</button>
+      <button class="opt">CPU limits are enforced by the scheduler while memory limits are enforced by the kubelet, using different mechanisms</button>
+    </div>
+    <p class="why">The asymmetry is physical, not a design inconsistency. CPU is fundamentally a rate the kernel can pause and resume (throttling); memory is state that, once written, can only be freed by ending whatever is using it — there's no "slow it down" option available the way there is for a CPU-bound process.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">A pod has one container with CPU request 200m / limit 400m, and memory request 256Mi / limit 256Mi. What QoS class does it get?</p>
+    <div class="opts">
+      <button class="opt">Guaranteed, since memory request equals its limit</button>
+      <button class="opt">BestEffort, since not every resource has request equal to limit</button>
+      <button class="opt">It depends on current node pressure at schedule time</button>
+      <button class="opt">Burstable — Guaranteed requires request to equal limit for every resource on every container; this pod's CPU request and limit differ, which is enough on its own to drop it out of Guaranteed</button>
+    </div>
+    <p class="why">Guaranteed has no partial credit — it takes exactly one resource on one container where request ≠ limit to fall back to Burstable, regardless of how tightly everything else is matched. This pod set requests and limits at all, which rules out BestEffort, but the CPU mismatch rules out Guaranteed.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">Why does Kubernetes derive QoS class from a pod's spec rather than letting it be set directly as a field?</p>
+    <div class="opts">
+      <button class="opt">Because it needs to be a mechanical, unfakeable consequence of the actual resource shape — a pod can't claim Guaranteed-level eviction protection without genuinely committing to fixed, predictable resource usage by setting request equal to limit everywhere</button>
+      <button class="opt">Historical accident; a settable field was considered but never implemented</button>
+      <button class="opt">QoS class only matters for logging and has no functional effect</button>
+      <button class="opt">Direct fields would conflict with namespace-level resource quotas</button>
+    </div>
+    <p class="why">If QoS class were just a label you set, it would say nothing trustworthy about actual behaviour. Deriving it from the request/limit shape ties the protection level directly to a real commitment — you only get Guaranteed's eviction protection by accepting Guaranteed's inflexibility (no bursting above what you requested).</p>
+  </div>
+</div>
+
+<h2>18.6 What to carry into Chapter 19</h2>
+<ul>
+<li>requests are a scheduling-time input read once; limits are a runtime constraint enforced continuously by cgroups. Neither substitutes for the other.</li>
+<li>CPU limits throttle because CPU time is revocable; memory limits kill because committed memory is not — this is physics, not policy.</li>
+<li>QoS class is computed from the shape of requests/limits, never set directly, and it is exactly what decided Chapter 7's eviction order.</li>
+<li>Guaranteed demands request equal limit on every resource, every container — one mismatch anywhere drops a pod to Burstable.</li>
+</ul>
+
+<p>Everything so far has treated replica count as something a human or a Deployment's spec decides once. The next chapter is what happens when a controller decides that number continuously, on its own, in response to exactly the metrics this chapter just explained.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +949,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1171,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>

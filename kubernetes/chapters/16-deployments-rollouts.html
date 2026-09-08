@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Under the Hood — Linux internals</title>
+<title>16 · Deployments and rollouts — Inside Out</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,241 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="16">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part V &nbsp;&middot;&nbsp; Workloads &nbsp;&middot;&nbsp; Chapter 16</p>
+  <h1>Deployments and rollouts</h1>
+  <p class="lede">A Deployment never touches a pod directly — it manages ReplicaSets, and keeps the old ones around, scaled to zero, as the entire mechanism a rollback actually uses. This chapter is that machinery, the two budgets that pace a rollout, and what happens when one gets stuck.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>16.1 A Deployment doesn't manage pods — it manages ReplicaSets</h2>
+
+<p>It's tempting to think of a Deployment as "the thing that manages your pods," and skip a layer that turns out to matter. A Deployment's actual, direct children are ReplicaSets (Chapter 5's scheduler places pods; the ReplicaSet from Chapter 1's example is what maintains their count). A Deployment doesn't touch pods at all — it creates and scales <em>ReplicaSets</em>, and each ReplicaSet is the one actually creating and deleting pods to match its own replica count.</p>
+
+<pre><code>Deployment "web"
+  └── ReplicaSet "web-7f9c4d8b6"  (revision 3, current)  replicas: 5
+  └── ReplicaSet "web-5b8d9c7f4"  (revision 2, old)        replicas: 0
+  └── ReplicaSet "web-6c7a8e9d1"  (revision 1, old)         replicas: 0</code></pre>
+
+<p>Every revision the Deployment has ever rolled out to keeps its own ReplicaSet object around, scaled to zero once superseded, rather than being deleted — and that retained history, not some separate log, is <em>literally what a rollback rolls back to</em>: scale the old ReplicaSet back up, scale the current one down. <code>revisionHistoryLimit</code> (default 10) caps how many of these old, zeroed ReplicaSets stick around before the oldest get garbage collected — set it to 0 and rollback stops being possible at all, because there's nothing left to roll back to.</p>
+
+<h2>16.2 Rolling update: two knobs controlling one trade-off</h2>
+
+<p>The default strategy, <code>RollingUpdate</code>, replaces old pods with new ones gradually rather than all at once, governed by exactly two numbers that trade off capacity against risk:</p>
+
+<table>
+<thead><tr><th>Field</th><th>Controls</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>maxSurge</code></td><td>How many pods <em>above</em> the desired count are allowed to exist during the rollout</td><td>25%</td></tr>
+<tr><td><code>maxUnavailable</code></td><td>How many pods <em>below</em> the desired count are tolerated during the rollout</td><td>25%</td></tr>
+</tbody>
+</table>
+
+<p><code>maxSurge: 0</code> forces old pods to be removed before any new one starts — never exceeding the original count, at the cost of dipping below it while the rollout proceeds. <code>maxUnavailable: 0</code> forces the opposite: never fewer than the desired count are ready, at the cost of briefly exceeding it. <code>maxSurge: 0</code> paired with <code>maxUnavailable: 1</code> (rather than 0) is the genuinely slow, capacity-constrained configuration — never above the desired count, replacing exactly one pod at a time. Setting <strong>both to 0 is not a valid configuration at all</strong>: the API server rejects it outright, because neither budget would ever be able to create room to swap even a single pod — nothing could be removed without first being replaced, and nothing could be created without first making room.</p>
+
+<h2>16.3 Watch a rollout consume its surge and unavailable budget</h2>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · rolling update, 4 replicas</span><span id="rostat">idle</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>maxSurge</label>
+      <button class="chip on" data-surge="1">1</button><button class="chip" data-surge="0">0</button><button class="chip" data-surge="2">2</button>
+      <label>maxUnavailable</label>
+      <button class="chip on" data-unavail="1">1</button><button class="chip" data-unavail="0">0</button>
+      <button class="chip" id="rogo">Roll out v2</button>
+      <button class="chip" id="roreset">Reset</button>
+    </div>
+    <div class="out" id="rolog" style="max-height:220px;overflow-y:auto">Set surge/unavailable and roll out.</div>
+  </div>
+  <div class="demonote">A newly created pod takes one beat to become Ready before it counts toward the availability floor — watch how a larger maxUnavailable lets multiple old pods leave in one batch, and a larger maxSurge lets multiple new pods arrive in one batch, independently of each other.</div>
 </div>
 
-<div id="toc"></div>
+<script>
+(function(){
+  var surge = 1, unavail = 1;
+  var log = document.getElementById('rolog');
+  var stat = document.getElementById('rostat');
+  var DESIRED = 4;
+  function line(t){ var d=document.createElement('div'); d.innerHTML=t; log.insertBefore(d, log.firstChild); }
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+  document.querySelectorAll('[data-surge]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('[data-surge]').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on'); surge = +b.dataset.surge;
+    });
+  });
+  document.querySelectorAll('[data-unavail]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('[data-unavail]').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on'); unavail = +b.dataset.unavail;
+    });
+  });
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+  document.getElementById('rogo').addEventListener('click', function(){
+    log.innerHTML = '';
 
+    if (surge === 0 && unavail === 0) {
+      stat.textContent = 'rejected';
+      line('<strong style="color:#C1121F">error: spec.strategy.rollingUpdate.maxUnavailable cannot be 0 if maxSurge is 0</strong> &mdash; the API server refuses this object outright. With neither budget nonzero, nothing could ever be removed (no replacement is allowed to exist yet) or created (no room exists to put it) &mdash; the rollout could never take its first step.');
+      return;
+    }
+
+    var oldCount = DESIRED, newReady = 0, starting = 0, cycle = 0;
+    stat.textContent = 'rolling...';
+    line('Start: ' + oldCount + ' old (v1) ready, 0 new (v2) &middot; maxSurge=' + surge + ', maxUnavailable=' + unavail);
+
+    function cycleStep(){
+      cycle++;
+      if (starting > 0) {
+        newReady += starting;
+        line('cycle ' + cycle + ': ' + starting + ' new pod(s) pass readiness &middot; old=' + oldCount + ' new-ready=' + newReady, '#0B8A5B');
+        starting = 0;
+      } else {
+        var ceiling = DESIRED + surge;
+        var ceilingRoom = ceiling - (oldCount + newReady);
+        var stillNeeded = DESIRED - newReady;
+        var createNow = Math.max(0, Math.min(ceilingRoom, stillNeeded));
+
+        if (createNow > 0) {
+          starting = createNow;
+          line('cycle ' + cycle + ': surge ceiling (' + ceiling + ') allows creating ' + createNow + ' new pod(s) now &middot; old=' + oldCount + ' new-ready=' + newReady + ' new-starting=' + starting);
+        } else {
+          var floor = DESIRED - unavail;
+          var removable = Math.max(0, Math.min(oldCount, oldCount + newReady - floor));
+          if (removable > 0) {
+            oldCount -= removable;
+            line('cycle ' + cycle + ': no surge room left &mdash; availability floor (' + floor + ') allows removing ' + removable + ' old pod(s) now &middot; old=' + oldCount + ' new-ready=' + newReady, '#E2622A');
+          }
+        }
+      }
+
+      if (newReady >= DESIRED && oldCount <= 0 && starting === 0) {
+        stat.textContent = 'rollout complete';
+        line('<strong style="color:#0B8A5B">Done: ' + newReady + '/' + DESIRED + ' v2 pods ready, 0 v1 remaining, in ' + cycle + ' cycles</strong>');
+        return;
+      }
+      setTimeout(cycleStep, 650);
+    }
+    setTimeout(cycleStep, 400);
+  });
+
+  document.getElementById('roreset').addEventListener('click', function(){ log.innerHTML=''; stat.textContent='idle'; });
+})();
+</script>
+
+<h2>16.4 Two conditions decide whether a rollout is actually stuck</h2>
+
+<p>A Deployment reports its state through <code>status.conditions</code>, and the one that actually answers "is this rollout healthy" is <code>Progressing</code>. A rollout that stalls — new pods perpetually failing readiness, an image that can't be pulled — doesn't hang forever silently; after <code>progressDeadlineSeconds</code> (default 600) with no forward progress, <code>Progressing</code> flips to <code>False</code> with reason <code>ProgressDeadlineExceeded</code>. Critically, this does <strong>not</strong> stop or roll back the rollout automatically — the broken new ReplicaSet keeps trying, old pods stay around holding the line on <code>maxUnavailable</code>, and the cluster sits in a stable-but-degraded holding pattern until a human intervenes with a rollback or a fix.</p>
+
+<pre><code>kubectl rollout status deployment/web
+# Waiting for deployment "web" rollout to finish: 2 out of 4 new replicas
+# have been updated...
+# (after progressDeadlineSeconds with no change)
+# error: deployment "web" exceeded its progress deadline</code></pre>
+
+<h2>16.5 Lab · read a rollout's real state and roll it back</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · revisions, rollback, and a stuck rollout</span><button data-copy>Copy</button></div>
+<pre><code># The ReplicaSets a Deployment actually owns, old ones scaled to zero
+kubectl get rs -l app=web
+#   web-7f9c4d8b6   5   5   5   2m    <- current
+#   web-5b8d9c7f4   0   0   0   1h    <- previous revision, kept for rollback
+#   web-6c7a8e9d1   0   0   0   3h
+
+# Revision history and what changed at each one
+kubectl rollout history deployment/web
+kubectl rollout history deployment/web --revision=2
+
+# Roll back to the previous revision - this scales an old ReplicaSet
+# back up and the current one down, nothing more exotic than that
+kubectl rollout undo deployment/web
+kubectl rollout undo deployment/web --to-revision=2
+
+# Watch Progressing flip when a rollout stalls
+kubectl get deployment web -o jsonpath='{.status.conditions[?(@.type=="Progressing")]}'
+#   reason: ProgressDeadlineExceeded  <- stuck, not auto-rolled-back
+
+# Pause a rollout mid-flight to inspect it without racing further changes
+kubectl rollout pause deployment/web
+kubectl rollout resume deployment/web
+
+# Confirm the actual surge/unavailable budget in effect
+kubectl get deployment web -o jsonpath='{.spec.strategy.rollingUpdate}'</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">A Deployment's rollout is rolled back to the previous version. What actually happens underneath?</p>
+    <div class="opts">
+      <button class="opt">Kubernetes re-applies the previous manifest from a stored history log and recreates pods from scratch</button>
+      <button class="opt">The previous revision's ReplicaSet, which still exists scaled to zero, is scaled back up while the current one is scaled down</button>
+      <button class="opt">The current pods are patched in place back to the old image</button>
+      <button class="opt">A snapshot of the old pods is restored from etcd</button>
+    </div>
+    <p class="why">Every revision's ReplicaSet sticks around, scaled to zero, up to revisionHistoryLimit. A rollback is just the same scale-up/scale-down mechanism a normal rollout uses, pointed at an old ReplicaSet instead of a new one — there's no separate rollback-specific machinery.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">A Deployment is configured with revisionHistoryLimit: 0. What is the direct consequence?</p>
+    <div class="opts">
+      <button class="opt">Rollouts happen faster since there's less to track</button>
+      <button class="opt">The Deployment can no longer scale up or down</button>
+      <button class="opt">Nothing observable changes during normal operation</button>
+      <button class="opt">Rollback becomes impossible, because the old, scaled-to-zero ReplicaSets a rollback would scale back up are garbage collected instead of being retained</button>
+    </div>
+    <p class="why">Rollback depends entirely on a previous revision's ReplicaSet object still existing. Setting the retention limit to zero means nothing is kept once superseded, so there is nothing left for kubectl rollout undo to scale back up.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">A Deployment's rollout stalls because new pods keep failing readiness. After progressDeadlineSeconds elapses, what happens automatically?</p>
+    <div class="opts">
+      <button class="opt">Nothing is rolled back automatically — the Progressing condition flips to False with ProgressDeadlineExceeded, and the cluster sits in a stable but degraded state until a human intervenes</button>
+      <button class="opt">Kubernetes automatically rolls back to the previous working revision</button>
+      <button class="opt">The Deployment is deleted to prevent further resource waste</button>
+      <button class="opt">All pods, old and new, are terminated</button>
+    </div>
+    <p class="why">progressDeadlineSeconds only changes what's reported, not what's done — it's a detection mechanism, not a remediation one. The broken rollout keeps running exactly as it was; a human (or separate automation) has to decide whether to fix the underlying issue or explicitly roll back.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">A Deployment with 4 desired replicas is submitted with maxSurge: 0 and maxUnavailable: 0. What happens?</p>
+    <div class="opts">
+      <button class="opt">The API server rejects the object outright — maxUnavailable cannot be 0 when maxSurge is also 0, since neither budget could ever create room to swap a single pod</button>
+      <button class="opt">All 4 pods are replaced simultaneously</button>
+      <button class="opt">The rollout proceeds one pod at a time — an old pod is removed and a new one created without ever exceeding or dipping below the desired count</button>
+      <button class="opt">The rollout starts normally and only fails once it reaches the progress deadline</button>
+    </div>
+    <p class="why">This combination looks plausible — "never exceed, never dip below" — but it's a genuine deadlock: removing an old pod first would drop below the desired count (forbidden by maxUnavailable: 0), and creating a new pod first would exceed it (forbidden by maxSurge: 0). Kubernetes' validation catches this at admission time rather than letting a rollout hang forever with no legal first move.</p>
+  </div>
+</div>
+
+<h2>16.6 What to carry into Chapter 17</h2>
+<ul>
+<li>A Deployment manages ReplicaSets, not pods directly — each ReplicaSet still does the pod-count reconciliation from Chapter 1.</li>
+<li>Old ReplicaSets are retained, scaled to zero, up to revisionHistoryLimit — that retained history is the entire rollback mechanism, not a separate log.</li>
+<li>maxSurge and maxUnavailable trade capacity against risk during a rollout; zero on both still works, just strictly serially.</li>
+<li>A stalled rollout is detected (Progressing/ProgressDeadlineExceeded) but never auto-remediated — it holds in a degraded state until something acts on it.</li>
+</ul>
+
+<p>Every rollout so far has assumed the new pods only differ in image or resource fields. The next chapter is what happens when what actually needs to change is configuration — and the surprising ways a config update does, and does not, reach an already-running pod.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +977,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1199,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>
