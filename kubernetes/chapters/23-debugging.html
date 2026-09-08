@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Linux Internals — kernel, processes, isolation</title>
+<title>23 · Debugging by symptom — Kubernetes Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,222 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="23">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part VI &nbsp;&middot;&nbsp; Operating it &nbsp;&middot;&nbsp; Chapter 23</p>
+  <h1>Debugging by symptom</h1>
+  <p class="lede">Pending, CrashLoopBackOff, ImagePullBackOff, OOMKilled — each one is a phase Kubernetes observed, not a cause it's naming for you. This chapter is the discipline of reasoning backward from the symptom to the specific chapter actually responsible, instead of guessing.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>23.1 A symptom names a phase, not a cause</h2>
+
+<p>Every failure this chapter covers is a status Kubernetes shows you directly — <code>Pending</code>, <code>CrashLoopBackOff</code>, <code>ImagePullBackOff</code>, <code>OOMKilled</code> — and every one of them is compatible with several genuinely different root causes, from different parts of this entire course. The discipline this chapter is actually teaching isn't a list of fixes; it's a habit of reasoning backward from a symptom to the specific chapter's mechanism that's actually misbehaving, rather than guessing at the first plausible cause and changing things until something works.</p>
+
+<h2>23.2 Pending: the pod was never even placed</h2>
+
+<p>A pod stuck <code>Pending</code> never made it past Chapter 5's scheduler at all — nothing about it starting, crashing, or misbehaving is even relevant yet. The one command that matters here is <code>kubectl describe pod</code>, whose events section states the scheduler's own reasons, per node, verbatim.</p>
+
+<table>
+<thead><tr><th>Event text contains</th><th>Cause</th><th>Chapter</th></tr></thead>
+<tbody>
+<tr><td>"Insufficient cpu" / "Insufficient memory"</td><td>No node has enough allocatable capacity for this pod's requests</td><td>5, 18</td></tr>
+<tr><td>"node(s) had taint ... that the pod didn't tolerate"</td><td>Every schedulable node is tainted against this pod</td><td>5</td></tr>
+<tr><td>"didn't match Pod's node affinity/selector"</td><td>A required affinity rule excludes every available node</td><td>5</td></tr>
+<tr><td>"pod has unbound immediate PersistentVolumeClaims"</td><td>A required PVC hasn't bound yet — often a StorageClass or provisioner problem</td><td>14</td></tr>
+</tbody>
+</table>
+
+<h2>23.3 ImagePullBackOff: scheduled, but the runtime never got a container to run</h2>
+
+<p>This is a Chapter 8 problem wearing a Chapter 6 phase — the pod is scheduled, but the container runtime can't produce a runnable container from the image reference given. <code>kubectl describe pod</code> again names the exact failure: <code>ErrImagePull</code> the first time, backing off into <code>ImagePullBackOff</code> on repeated failure. The specific error text is almost always sufficient on its own — "manifest unknown" means a bad tag or a typo, "unauthorized" or "pull access denied" means a missing or wrong <code>imagePullSecret</code>, and a plain timeout means a network or registry-reachability problem from that specific node.</p>
+
+<h2>23.4 CrashLoopBackOff: it started, and then it stopped, repeatedly</h2>
+
+<p>Everything Chapter 6 said about backoff is doing real work here: this phase specifically means the container started successfully and then exited — the opposite failure mode from ImagePullBackOff, which never got a container running at all. <code>kubectl logs --previous</code> is the load-bearing command, because the current container is usually already restarting again by the time you look, and its fresh logs may say nothing useful yet — <code>--previous</code> gets you the crashed instance's own output.</p>
+
+<div class="callout warn">
+  <span class="tag">The distinction that changes the fix entirely</span>
+  <p>An application that exits immediately with a stack trace is an application bug — no Kubernetes setting fixes it. An application still running fine when it gets killed is a probe misconfiguration (Chapter 6) — check whether a liveness probe is actually the one killing it, and whether it's pointed at something the container doesn't own (Chapter 6.2's warning). Conflating these two is the single most common wasted debugging session in this category: tuning probe timeouts against what is actually a crashing application, or rewriting application code to fix what is actually an overly aggressive liveness probe.</p>
 </div>
 
-<div id="toc"></div>
+<h2>23.5 Interactive: pick a symptom, walk the tree</h2>
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+<div class="demo">
+  <div class="demohead"><span>Interactive · symptom &rarr; diagnostic path</span><span id="dgstat"></span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <select id="dgsymptom">
+        <option value="pending">Pod stuck Pending</option>
+        <option value="imagepull">ImagePullBackOff</option>
+        <option value="crashloop">CrashLoopBackOff</option>
+        <option value="oom">OOMKilled</option>
+        <option value="dns">Intermittent DNS failures / timeouts</option>
+      </select>
+      <button class="chip" id="dggo">Show diagnostic path</button>
+    </div>
+    <div class="out" id="dgout" style="max-height:260px;overflow-y:auto"></div>
+  </div>
+</div>
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+<script>
+(function(){
+  var TREES = {
+    pending: {
+      cmd: 'kubectl describe pod &lt;name&gt; | grep -A10 Events',
+      steps: [
+        'Read the FailedScheduling event text verbatim — it names the exact reason, per node.',
+        '"Insufficient cpu/memory" → check node capacity vs. this pod’s requests (Ch. 5, 18). Either the cluster is genuinely full, or requests are set far larger than needed.',
+        '"taint ... didn’t tolerate" → check node taints vs. this pod’s tolerations (Ch. 5). Often a control-plane or specialised-hardware node with nothing meant to run there.',
+        '"unbound immediate PersistentVolumeClaims" → check the PVC’s own status and StorageClass (Ch. 14) — this is a storage problem wearing a scheduling symptom.'
+      ]
+    },
+    imagepull: {
+      cmd: 'kubectl describe pod &lt;name&gt; | grep -A5 Events',
+      steps: [
+        'Read the exact pull error — it almost always names the problem directly.',
+        '"manifest unknown" / "not found" → the image tag or repository name is wrong. Check the manifest against what actually exists in the registry.',
+        '"unauthorized" / "pull access denied" → missing or incorrect imagePullSecrets on the pod or its ServiceAccount (Ch. 20).',
+        'A plain timeout with no clear HTTP error → network/DNS reachability from that specific node to the registry (Ch. 9, 11) — test from the node itself, not just your workstation.'
+      ]
+    },
+    crashloop: {
+      cmd: 'kubectl logs &lt;name&gt; --previous',
+      steps: [
+        'Read the crashed instance’s own last output — not the current, possibly-just-restarted container’s logs.',
+        'A stack trace, config error, or explicit non-zero exit → an application bug or misconfiguration. No Kubernetes setting fixes this; fix the app or its config/Secret inputs (Ch. 17).',
+        'Clean exit, or the app appears to have been healthy right up to termination → check for a liveness probe killing it (Ch. 6) — especially one pointed at an external dependency.',
+        'Exit code 137 specifically → this is not a crash at all, it’s OOMKilled. Go to that path instead.'
+      ]
+    },
+    oom: {
+      cmd: 'kubectl get pod &lt;name&gt; -o jsonpath=\'{.status.containerStatuses[0].lastState.terminated}\'',
+      steps: [
+        'Confirm reason: OOMKilled and exitCode: 137 — this is a memory-limit kill, not a crash (Ch. 18).',
+        'Check whether actual usage genuinely exceeds a reasonable working set, or the limit was simply set too low relative to real need.',
+        'A sudden OOMKill under load, previously fine → possible memory leak, or a limit sized for average rather than peak usage.',
+        'This is never fixed by adjusting a liveness probe — probes and OOM kills are unrelated mechanisms (Ch. 6 vs. Ch. 18) that happen to produce a similarly dead pod.'
+      ]
+    },
+    dns: {
+      cmd: 'kubectl exec &lt;name&gt; -- cat /etc/resolv.conf',
+      steps: [
+        'Confirm this isn’t simply the ndots cost from Ch. 11 — an external FQDN with few dots pays for several guaranteed-NXDOMAIN queries before resolving; check whether a trailing dot fixes the observed latency.',
+        'Confirm CoreDNS pods themselves are healthy and not resource-throttled (Ch. 18) — a struggling CoreDNS produces exactly this symptom cluster-wide.',
+        'Intermittent, not constant → check for CoreDNS pods being evicted or restarted around the same time as failures (Ch. 7) — correlate timestamps, don’t assume.',
+        'Only specific pods affected → check NetworkPolicy (Ch. 13) for an egress rule that’s inadvertently blocking DNS port 53 traffic.'
+      ]
+    }
+  };
+  document.getElementById('dggo').addEventListener('click', function(){
+    var key = document.getElementById('dgsymptom').value;
+    var tree = TREES[key];
+    var out = document.getElementById('dgout');
+    out.innerHTML = '<div style="margin-bottom:10px"><strong>Start here:</strong> <code>' + tree.cmd + '</code></div>' +
+      '<ol style="padding-left:1.2em;margin:0">' + tree.steps.map(function(s){ return '<li style="margin-bottom:8px">' + s + '</li>'; }).join('') + '</ol>';
+  });
+  document.getElementById('dggo').click();
+})();
+</script>
 
+<h2>23.6 Lab · the commands this whole chapter reduces to</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · the actual triage sequence, every time</span><button data-copy>Copy</button></div>
+<pre><code># Phase and conditions first - narrows which section of this chapter applies
+kubectl get pod &lt;name&gt; -o wide
+kubectl get pod &lt;name&gt; -o jsonpath='{.status.phase} {.status.conditions}'
+
+# Events, always - this is the single highest-value command in this chapter
+kubectl describe pod &lt;name&gt; | grep -A15 Events
+
+# The crashed instance's own logs, not the current one's
+kubectl logs &lt;name&gt; --previous
+kubectl logs &lt;name&gt; --previous --all-containers
+
+# The exact termination reason and exit code, unambiguous
+kubectl get pod &lt;name&gt; -o jsonpath='{.status.containerStatuses[*].lastState.terminated}'
+
+# Cluster-wide events, sorted, when a symptom hits many pods at once -
+# a shared cause is usually visible here before it is in any one pod
+kubectl get events --sort-by=.lastTimestamp -A | tail -40
+
+# When nothing above explains it, an ephemeral debug container gets you
+# a shell in the exact failing pod's network/PID namespace without
+# changing the pod's image or restarting it
+kubectl debug -it &lt;name&gt; --image=busybox --target=&lt;container&gt;</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">A pod shows CrashLoopBackOff. kubectl logs (without --previous) shows nothing useful. What should you do before concluding there's no log data at all?</p>
+    <div class="opts">
+      <button class="opt">Increase the liveness probe timeout and see if it stops crashing</button>
+      <button class="opt">Run kubectl logs --previous — the current container may already be a fresh restart with nothing logged yet; the crashed instance's own output is a separate log stream</button>
+      <button class="opt">Delete and recreate the pod</button>
+      <button class="opt">Assume the image itself is corrupted</button>
+    </div>
+    <p class="why">By the time you look at a crash-looping pod, it's often already restarted — plain kubectl logs shows the new, possibly quiet instance. --previous specifically retrieves the crashed container's own final output, which is usually where the actual explanation lives.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">A pod's last termination shows reason: OOMKilled, exitCode: 137. Someone suggests loosening its liveness probe's timeout to fix it. Why won't that help?</p>
+    <div class="opts">
+      <button class="opt">Liveness probes and memory limits use the same underlying timeout, so the suggestion is directionally correct but needs a bigger number</button>
+      <button class="opt">OOMKilled pods are always restarted immediately regardless of probe settings</button>
+      <button class="opt">exitCode 137 is caused by a failed readiness probe, not liveness</button>
+      <button class="opt">OOMKilled is the kernel killing the process for exceeding its memory limit — an entirely separate mechanism (Ch. 18) from probes (Ch. 6); no probe setting has any effect on when or whether the kernel enforces a memory cgroup limit</button>
+    </div>
+    <p class="why">This is exactly the kind of category error 23.4's callout warns about, applied to a different pair of mechanisms: OOMKilled is cgroup memory enforcement, unrelated to liveness/readiness probing entirely. The actual fix is addressing real memory usage against the limit, or raising the limit if the usage is legitimate.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">Several unrelated pods across a namespace start failing DNS lookups intermittently, all around the same few-minute window. What should you check first?</p>
+    <div class="opts">
+      <button class="opt">Whether the CoreDNS pods themselves were unhealthy, throttled, or restarting during that exact window — a shared, cluster-level cause producing a symptom that looks like it's "each pod's own problem"</button>
+      <button class="opt">Each affected pod's own resolv.conf individually, assuming independent misconfiguration</button>
+      <button class="opt">Whether every affected pod's application code has a DNS-related bug</button>
+      <button class="opt">Whether the affected pods share a common NetworkPolicy, before checking anything about DNS itself</button>
+    </div>
+    <p class="why">Multiple unrelated pods failing the same way at the same time is a strong signal of a shared, lower-level cause rather than several coincidental individual problems. CoreDNS health and resource pressure (tying back to Ch. 7 and Ch. 18) is exactly the kind of cluster-wide cause that produces symptoms scattered across many seemingly-unrelated pods.</p>
+  </div>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">A pod is Pending with the event "0/5 nodes are available: 5 node(s) had taint {dedicated: gpu}, that the pod didn't tolerate." What is actually wrong?</p>
+    <div class="opts">
+      <button class="opt">The pod's resource requests exceed cluster capacity</button>
+      <button class="opt">The container image cannot be pulled on any node</button>
+      <button class="opt">Every available node is tainted for GPU workloads, and this pod has no matching toleration — a Chapter 5 filter failure, unrelated to resource capacity or image availability</button>
+      <button class="opt">A required PersistentVolumeClaim has not bound</button>
+    </div>
+    <p class="why">The event text names the exact filter that failed — taint/toleration mismatch — directly, with no need to guess between the several other reasons a pod can be Pending. Reading the event precisely, rather than assuming "Pending always means resource pressure," is the entire skill this section is teaching.</p>
+  </div>
+</div>
+
+<h2>23.7 What to carry into Chapter 24</h2>
+<ul>
+<li>A symptom names a phase Kubernetes observed, not a root cause — Pending, ImagePullBackOff, CrashLoopBackOff and OOMKilled each map to genuinely different parts of the system.</li>
+<li><code>kubectl describe</code>'s events and <code>kubectl logs --previous</code> answer more real incidents than any other two commands in this course.</li>
+<li>Probe misconfiguration (Ch. 6) and OOM kills (Ch. 18) produce similarly dead pods through completely unrelated mechanisms — treating them interchangeably wastes real debugging time.</li>
+<li>A symptom appearing across many unrelated pods at once points at a shared, lower-level cause, not independent coincidences.</li>
+</ul>
+
+<p>This course has moved through the system in pieces — one control loop, one component, one failure mode at a time. The capstone puts it back together: one <code>kubectl apply</code>, traced through every layer this course covered, in the order it actually happens.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +958,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1180,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>

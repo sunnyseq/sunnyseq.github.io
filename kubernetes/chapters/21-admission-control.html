@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Linux Internals — kernel, processes, isolation</title>
+<title>21 · Admission control — Kubernetes Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,204 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="21">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part VI &nbsp;&middot;&nbsp; Operating it &nbsp;&middot;&nbsp; Chapter 21</p>
+  <h1>Admission control</h1>
+  <p class="lede">By the time an object reaches admission, the API server has already decided you're allowed to do this. Admission asks a different question entirely — should this specific object, in this specific shape, be allowed to exist at all.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>21.1 The stage that runs after permission is already granted</h2>
+
+<p>It's worth being precise about where admission sits, because it's easy to conflate with RBAC. By the time an object reaches admission, authentication and authorization have both already said yes — the requester is who they claim to be, and they're allowed to perform this verb on this resource. Admission answers a completely different question: given that this specific request is permitted, should this specific <em>object</em>, in this specific shape, actually be allowed to exist? A user with full permission to create Pods can still be blocked here — not because they lack access, but because the pod they're trying to create violates a policy that has nothing to do with who they are.</p>
+
+<h2>21.2 Two webhook types, and the order between them is not negotiable</h2>
+
+<p>Chapter 2 already named the two webhook types and their fixed order — mutating before validating — but the reasoning behind that ordering rewards a second look now that policy is the actual subject. A <strong>mutating webhook</strong> can add, remove, or change fields on an object as it passes through; a <strong>validating webhook</strong> can only accept or reject the object it's shown, with no ability to alter it. Running every mutating webhook to completion first, then every validating webhook against the final result, is what lets a validating policy check "does this pod run as non-root" without needing to know whether that came from the user's own manifest or from a mutating webhook injecting it moments earlier — validation only ever sees the final, fully-mutated object, never in-progress state.</p>
+
+<h2>21.3 failurePolicy: the setting that decides what happens when the webhook itself is unreachable</h2>
+
+<p>Every webhook configuration carries a <code>failurePolicy</code>, and it answers a question that has nothing to do with the object being evaluated: what happens when the webhook <em>server itself</em> times out, errors, or can't be reached at all?</p>
+
+<table>
+<thead><tr><th>failurePolicy</th><th>Webhook unreachable, effect</th><th>Fails toward</th></tr></thead>
+<tbody>
+<tr><td><code>Ignore</code></td><td>The request proceeds as if the webhook had approved it</td><td>Availability — a broken webhook never blocks the cluster, but silently stops enforcing anything while it's down</td></tr>
+<tr><td><code>Fail</code></td><td>The request is rejected</td><td>Correctness — nothing bypasses policy, but a broken webhook can now block all matching requests cluster-wide, including ones with nothing to do with why it broke</td></tr>
+</tbody>
+</table>
+
+<div class="callout bad">
+  <span class="tag">Why this choice is genuinely load-bearing</span>
+  <p>A security-critical policy (blocking privileged containers, enforcing image provenance) set to <code>Ignore</code> means the one time the webhook pod itself is unhealthy — a bad rollout, a resource crunch, a networking blip — is exactly when nothing is being enforced, with no error surfaced to anyone watching. The same policy set to <code>Fail</code> means a webhook outage becomes a cluster-wide outage for whatever it gates, which is its own real cost. There is no universally correct default; the honest approach is deciding, per webhook, which failure mode is more dangerous for what it protects, and there usually is a real, different answer for "block privileged containers" versus "inject a sidecar."</p>
 </div>
 
-<div id="toc"></div>
+<h2>21.4 Watch admission run, and watch a webhook outage change the outcome</h2>
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+<div class="demo">
+  <div class="demohead"><span>Interactive · admission with a webhook outage</span><span id="adstat">webhook healthy</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>Validating webhook</label>
+      <button class="chip on" id="adhealthy">healthy</button>
+      <label>failurePolicy</label>
+      <button class="chip on" data-fp="Fail">Fail</button>
+      <button class="chip" data-fp="Ignore">Ignore</button>
+      <button class="chip" id="adsend">Submit a privileged pod</button>
+    </div>
+    <div class="out" id="adout">A validating webhook rejects privileged containers. Submit a request to see it enforced.</div>
+  </div>
+  <div class="demonote">Toggle the webhook to unhealthy and resubmit under each failurePolicy — Fail blocks the request outright (safe, but the cluster-wide effect of the outage is now visible); Ignore lets a privileged pod straight through, silently, with no error to anyone.</div>
+</div>
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+<script>
+(function(){
+  var healthy = true, fp = 'Fail';
+  document.getElementById('adhealthy').addEventListener('click', function(){
+    healthy = !healthy;
+    this.textContent = healthy ? 'healthy' : 'unreachable';
+    this.classList.toggle('on', healthy);
+    document.getElementById('adstat').textContent = healthy ? 'webhook healthy' : 'webhook unreachable';
+    document.getElementById('adstat').style.color = healthy ? '' : '#C1121F';
+  });
+  document.querySelectorAll('[data-fp]').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('[data-fp]').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on'); fp = b.dataset.fp;
+    });
+  });
+  document.getElementById('adsend').addEventListener('click', function(){
+    var out = document.getElementById('adout');
+    if (healthy) {
+      out.innerHTML = '<strong style="color:#C1121F">Rejected.</strong> The validating webhook ran successfully and refused this pod: privileged containers are not allowed.';
+      return;
+    }
+    if (fp === 'Fail') {
+      out.innerHTML = '<strong style="color:#C1121F">Rejected — but for the wrong reason.</strong> The webhook could not be reached at all; failurePolicy: Fail refuses the request rather than risk letting something unvetted through. Every matching request is blocked right now, not just this one.';
+    } else {
+      out.innerHTML = '<strong style="color:#E2622A">Admitted.</strong> The webhook could not be reached, and failurePolicy: Ignore treats that as approval. This privileged pod is now running, and nothing logged an enforcement failure anywhere a human would necessarily see it.';
+    }
+  });
+})();
+</script>
 
+<h2>21.5 CEL-based policy: enforcement without running a webhook at all</h2>
+
+<p><strong>ValidatingAdmissionPolicy</strong> answers a specific complaint about webhooks: every webhook call is a network round trip to a separate service that has to be deployed, kept healthy, and reasoned about for exactly the failure modes above. A ValidatingAdmissionPolicy instead evaluates a rule written in <strong>CEL</strong> (Common Expression Language) directly inside the API server's own admission chain — no separate pod, no network hop, no webhook server to keep alive at all.</p>
+
+<pre><code>apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+spec:
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      resources: ["pods"]
+  validations:
+  - expression: "!object.spec.containers.exists(c, c.securityContext.privileged == true)"
+    message: "privileged containers are not allowed"</code></pre>
+
+<p>This isn't a strictly better replacement for tools like OPA Gatekeeper or Kyverno — CEL policies are comparatively limited in what they can express (no external data lookups, no calling out to another system), and the webhook-based tools remain the answer for anything needing that. What ValidatingAdmissionPolicy removes is the operational weight of running a webhook server for the large share of policies that are pure, self-contained checks against the object itself — exactly the kind of policy where "is the webhook currently healthy" was never a question that should have needed asking.</p>
+
+<h2>21.6 Lab · watch the chain, and prove failurePolicy's effect</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · admission webhooks, made visible</span><button data-copy>Copy</button></div>
+<pre><code># Every webhook actually configured on this cluster, and its failurePolicy
+kubectl get validatingwebhookconfigurations -o json \
+  | jq '.webhooks[] | {name, failurePolicy}'
+kubectl get mutatingwebhookconfigurations -o json \
+  | jq '.webhooks[] | {name, failurePolicy}'
+
+# Dry-run to see admission's effect without actually persisting anything
+kubectl apply -f privileged-pod.yaml --dry-run=server
+# a rejection here is a validating webhook or ValidatingAdmissionPolicy
+# doing its job, before storage was ever touched
+
+# Confirm what a mutating webhook actually changed, by diffing what you
+# sent against what got stored
+kubectl apply -f pod.yaml --dry-run=server -o yaml > /tmp/after-admission.yaml
+diff pod.yaml /tmp/after-admission.yaml
+
+# See a ValidatingAdmissionPolicy's own account of a rejection
+kubectl get pod bad-pod -o yaml 2>&1 | grep -A3 "denied the request"
+
+# Simulate the failurePolicy question directly: scale a webhook's
+# backing deployment to zero and watch matching requests behave
+kubectl scale deployment my-admission-webhook --replicas=0 -n webhook-system
+kubectl apply -f test-pod.yaml   # outcome now depends entirely on failurePolicy</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">A user with full RBAC permission to create Pods has their pod creation rejected. What does this most likely indicate?</p>
+    <div class="opts">
+      <button class="opt">RBAC is misconfigured despite appearing to grant access</button>
+      <button class="opt">The user's authentication token has expired mid-request</button>
+      <button class="opt">Admission control rejected the object's specific shape — a validating webhook or policy found something about this particular pod objectionable, independent of whether the user was allowed to attempt the create at all</button>
+      <button class="opt">The API server's storage layer is unavailable</button>
+    </div>
+    <p class="why">RBAC and admission are separate gates answering separate questions. Full permission to create pods says nothing about whether any specific pod's contents are acceptable — that's admission's job, and it runs after authorization has already succeeded.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">A security-critical validating webhook is configured with failurePolicy: Ignore. What is the risk this specifically introduces?</p>
+    <div class="opts">
+      <button class="opt">The webhook runs twice per request, doubling latency</button>
+      <button class="opt">If the webhook itself becomes unreachable, requests it would have rejected are silently admitted instead, with no policy actually enforced during the outage and no obvious error surfaced</button>
+      <button class="opt">The webhook stops receiving mutating admission requests entirely</button>
+      <button class="opt">RBAC permissions are bypassed for the duration of the outage</button>
+    </div>
+    <p class="why">Ignore fails toward availability specifically: an unreachable webhook is treated as an approval. For a policy actually meant to block something dangerous, this means the exact moment the webhook is unhealthy is the moment nothing is stopping the thing it exists to prevent.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">What does ValidatingAdmissionPolicy remove that a webhook-based validating policy requires?</p>
+    <div class="opts">
+      <button class="opt">A separate webhook server to deploy, keep healthy, and reason about failurePolicy for — the CEL expression runs directly inside the API server's own admission chain instead</button>
+      <button class="opt">The need for authentication before authorization can run</button>
+      <button class="opt">The distinction between mutating and validating admission</button>
+      <button class="opt">The ability to reject an object at all</button>
+    </div>
+    <p class="why">The actual operational cost ValidatingAdmissionPolicy targets is the webhook server itself — the network hop, the deployment, the health monitoring, and the failurePolicy question that only exists because a webhook is a separate, independently-failing service. A CEL expression evaluated in-process has none of that, at the cost of being unable to call out to external systems the way a webhook can.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Why must every mutating webhook finish running before any validating webhook sees the object?</p>
+    <div class="opts">
+      <button class="opt">Mutating webhooks are prioritized by an unrelated scheduling concern</button>
+      <button class="opt">Validating webhooks are faster and should run first for performance, but the order is reversed by convention</button>
+      <button class="opt">It prevents mutating webhooks from being used at all in clusters with strict validation</button>
+      <button class="opt">A validating policy needs to judge the object's final, real shape — if mutation ran afterward or concurrently, validation could reject (or wrongly approve) an object based on a version of it that was never actually going to be stored</button>
+    </div>
+    <p class="why">Validation is meant to be the last word on whether an object is acceptable. That only makes sense if it's evaluating the object exactly as it will actually be persisted — which requires every mutation to have already happened, deterministically, before validation ever runs.</p>
+  </div>
+</div>
+
+<h2>21.7 What to carry into Chapter 22</h2>
+<ul>
+<li>Admission runs after authentication and authorization both already succeeded — it judges the object's shape, not the requester's rights.</li>
+<li>Mutating webhooks always run to completion before validating webhooks, so validation always judges the final, real object.</li>
+<li>failurePolicy decides what an unreachable webhook defaults to — Ignore risks silent non-enforcement, Fail risks a webhook outage becoming a cluster-wide block, and the right choice differs per policy.</li>
+<li>ValidatingAdmissionPolicy trades a webhook server's operational weight for CEL's more limited expressiveness — a good fit for pure, self-contained checks.</li>
+</ul>
+
+<p>Everything through this course so far has worked with Kubernetes' own built-in object types. The next chapter is how the API itself gets extended with entirely new ones — and the pattern that watches them the same way every controller in this course has watched everything else.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +940,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1162,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>

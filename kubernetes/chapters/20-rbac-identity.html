@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Linux Internals — kernel, processes, isolation</title>
+<title>20 · RBAC and workload identity — Kubernetes Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,207 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="20">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part VI &nbsp;&middot;&nbsp; Operating it &nbsp;&middot;&nbsp; Chapter 20</p>
+  <h1>RBAC and workload identity</h1>
+  <p class="lede">RBAC answers exactly one question — is this identity allowed to do this, to this, here — and nothing about how that identity proved itself. This chapter is that question, the two-object grant it's built from, and the identity a pod actually carries, which is never yours.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>20.1 Three questions, and RBAC only answers one</h2>
+
+<p>Chapter 2's request path named three separate questions the API server asks of every request: who are you (authentication), are you allowed (authorization), and is this well-formed (admission/validation). RBAC lives entirely in the second question. It has no opinion about how a request proved its identity — a client certificate, a bearer token, an OIDC ID token are all equally acceptable inputs to RBAC, which only ever sees the <em>output</em> of authentication: a username and a set of group memberships. Everything RBAC decides is a pure function of <code>(user or group, verb, resource, namespace)</code> — nothing about the request body, nothing about time of day, nothing about where the request came from.</p>
+
+<h2>20.2 Role and RoleBinding: a grant is two objects, never one</h2>
+
+<p>Permission in RBAC is always expressed as two separate objects, deliberately kept apart: a <strong>Role</strong> (or <strong>ClusterRole</strong>) lists <em>what</em> is allowed — verbs against resources — with no mention of who; a <strong>RoleBinding</strong> (or <strong>ClusterRoleBinding</strong>) names <em>who</em> gets a specific Role, with no mention of what it permits. Neither object does anything alone.</p>
+
+<pre><code>Role "pod-reader" (namespace: default)        RoleBinding "read-pods-as-alice"
+  rules:                                         subjects:
+  - apiGroups: [""]                              - kind: User
+    resources: ["pods"]                             name: alice
+    verbs: ["get", "list", "watch"]              roleRef:
+                                                    kind: Role
+                                                    name: pod-reader</code></pre>
+
+<p>The split matters operationally: the same Role can be bound to many different subjects via many separate RoleBindings without editing the Role at all, and revoking one person's access is deleting one RoleBinding, never touching the permission definition itself. Four combinations exist, distinguished by whether the permission-listing object and the binding are namespaced or cluster-scoped:</p>
+
+<table>
+<thead><tr><th>Combination</th><th>Scope of the grant</th></tr></thead>
+<tbody>
+<tr><td>Role + RoleBinding</td><td>One namespace only</td></tr>
+<tr><td>ClusterRole + RoleBinding</td><td>One namespace, but reusing a permission set defined once, cluster-wide (a common pattern: define "view" once as a ClusterRole, bind it namespace-by-namespace)</td></tr>
+<tr><td>ClusterRole + ClusterRoleBinding</td><td>Every namespace, cluster-wide</td></tr>
+<tr><td>Role + ClusterRoleBinding</td><td>Not valid — a namespaced Role cannot be referenced by a cluster-scoped binding</td></tr>
+</tbody>
+</table>
+
+<h2>20.3 Watch a decision get made, then watch it get denied</h2>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · evaluating an RBAC request</span><span id="rbstat">idle</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <label>Subject</label>
+      <select id="rbsubject">
+        <option value="alice">alice (bound to pod-reader)</option>
+        <option value="bob">bob (no bindings)</option>
+        <option value="ci-sa">system:serviceaccount:ci:deployer (bound to deployer ClusterRole)</option>
+      </select>
+      <label>Action</label>
+      <select id="rbaction">
+        <option value="get-pods">get pods</option>
+        <option value="delete-pods">delete pods</option>
+        <option value="create-deployments">create deployments</option>
+      </select>
+      <button class="chip" id="rbcheck">Evaluate</button>
+    </div>
+    <div class="out" id="rbout">Pick a subject and action, then evaluate.</div>
+  </div>
+  <div class="demonote">RBAC is default-deny with no exceptions — there is no rule that explicitly forbids something, only the absence of a rule that allows it. "Not permitted" and "no matching rule exists" are the same outcome, always.</div>
 </div>
 
-<div id="toc"></div>
+<script>
+(function(){
+  var BINDINGS = {
+    'alice': [{resource:'pods', verbs:['get','list','watch']}],
+    'bob': [],
+    'ci-sa': [{resource:'pods', verbs:['get','list','watch','delete']}, {resource:'deployments', verbs:['get','list','create','update']}]
+  };
+  var ACTIONS = {
+    'get-pods': {resource:'pods', verb:'get', label:'get pods'},
+    'delete-pods': {resource:'pods', verb:'delete', label:'delete pods'},
+    'create-deployments': {resource:'deployments', verb:'create', label:'create deployments'}
+  };
+  document.getElementById('rbcheck').addEventListener('click', function(){
+    var subj = document.getElementById('rbsubject').value;
+    var act = ACTIONS[document.getElementById('rbaction').value];
+    var rules = BINDINGS[subj] || [];
+    var matched = rules.find(function(r){ return r.resource === act.resource && r.verbs.indexOf(act.verb) > -1; });
+    var out = document.getElementById('rbout');
+    var stat = document.getElementById('rbstat');
+    if (matched) {
+      stat.textContent = 'allowed';
+      out.innerHTML = '<strong style="color:#0B8A5B">Allowed.</strong> A binding grants ' + subj + ' the verb <code>' + act.verb + '</code> on <code>' + act.resource + '</code>.';
+    } else {
+      stat.textContent = 'denied';
+      out.innerHTML = '<strong style="color:#C1121F">Forbidden.</strong> No RoleBinding or ClusterRoleBinding grants ' + subj + ' <code>' + act.verb + '</code> on <code>' + act.resource + '</code> — not because a rule explicitly forbids it, but because none exists that allows it.';
+    }
+  });
+})();
+</script>
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+<h2>20.4 A pod's identity is not your identity</h2>
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+<p>Every pod authenticates to the API server as a <strong>ServiceAccount</strong> — never as the human who created it. A pod created by <code>alice</code> and a pod created by <code>bob</code>, both using the same ServiceAccount, present the exact same identity to the API server; RBAC has no memory of who applied the manifest, only of which ServiceAccount the running pod is using right now. This is precisely why granting a ServiceAccount broad permissions "just for this one job" is a durable decision, not a temporary one — every future pod that mounts that ServiceAccount inherits it, indefinitely, regardless of who deploys it.</p>
 
+<div class="callout warn">
+  <span class="tag">The default ServiceAccount is not a safe default</span>
+  <p>Every namespace has a <code>default</code> ServiceAccount, and every pod that doesn't specify one uses it automatically. On many clusters, that account can read a wide range of objects in its namespace by virtue of whatever's bound to it — and a single vulnerable, internet-facing pod with the default ServiceAccount's token mounted is a real, common path to lateral movement inside a cluster. Explicitly creating a dedicated, minimally-scoped ServiceAccount per workload — and setting <code>automountServiceAccountToken: false</code> on anything that doesn't need to talk to the API server at all — is not a hardening nicety, it's closing a door that's open by default.</p>
+</div>
+
+<h2>20.5 Bound, projected, and expiring — not the old long-lived token</h2>
+
+<p>Early Kubernetes mounted a ServiceAccount's token as a static Secret, valid forever, with no expiry and no way to tell whether a given copy was ever actually revoked. Modern clusters use <strong>bound service account tokens</strong> instead, projected into the pod as a volume and refreshed automatically well before they expire (typically within an hour). The improvement is not just a shorter lifetime — a bound token is cryptographically tied to the specific pod (and optionally a specific audience, like a particular external service it's meant to authenticate to), so a token stolen from one pod's filesystem cannot be replayed indefinitely, nor used to impersonate a different pod, and it stops being valid the moment the pod it was issued for is deleted.</p>
+
+<h2>20.6 Lab · trace a permission from binding to decision</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · RBAC, service accounts, and token projection</span><button data-copy>Copy</button></div>
+<pre><code># The single most useful RBAC command that exists - ask, don't guess
+kubectl auth can-i delete pods --as=alice -n default
+kubectl auth can-i create deployments --as=system:serviceaccount:ci:deployer
+
+# Every RoleBinding actually granting a given subject anything, cluster-wide
+kubectl get rolebindings,clusterrolebindings -A -o json \
+  | jq '.items[] | select(.subjects[]?.name=="alice")'
+
+# What ServiceAccount is this pod actually running as, and what can it do
+kubectl get pod web-abc -o jsonpath='{.spec.serviceAccountName}'
+kubectl auth can-i --list --as=system:serviceaccount:default:web-sa
+
+# Confirm the default ServiceAccount's actual blast radius before assuming it's harmless
+kubectl auth can-i --list --as=system:serviceaccount:default:default
+
+# The projected, bound token itself - short-lived, audience-scoped
+kubectl exec web-abc -- cat /var/run/secrets/kubernetes.io/serviceaccount/token | cut -d. -f2 | base64 -d
+#   {"aud":["https://kubernetes.default.svc"],"exp":..., "sub":"system:serviceaccount:default:web-sa"}
+
+# Turn off auto-mounting for a pod that never talks to the API server
+kubectl patch serviceaccount web-sa -p '{"automountServiceAccountToken": false}'</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">A Role grants get/list/watch on pods, but no RoleBinding exists connecting it to any subject. What can that Role actually do?</p>
+    <div class="opts">
+      <button class="opt">Grant the permission to every authenticated user by default</button>
+      <button class="opt">Nothing — a Role with no RoleBinding grants no one anything; the two objects only take effect together</button>
+      <button class="opt">Grant the permission automatically to any pod in the same namespace</button>
+      <button class="opt">Grant the permission to cluster administrators only</button>
+    </div>
+    <p class="why">Roles and RoleBindings are deliberately separate and both required. A Role by itself is just a named list of rules sitting inert — it confers nothing until a RoleBinding (or ClusterRoleBinding) actually connects it to a subject.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Two different humans, alice and bob, both create pods that use the same ServiceAccount "shared-sa". How does the API server tell their pods' requests apart for RBAC purposes?</p>
+    <div class="opts">
+      <button class="opt">By checking the metadata.createdBy field Kubernetes attaches automatically</button>
+      <button class="opt">By the node each pod is running on</button>
+      <button class="opt">By comparing the pods' labels against each user's RBAC bindings</button>
+      <button class="opt">It doesn't — both pods authenticate as the identical identity, system:serviceaccount:&lt;ns&gt;:shared-sa, and RBAC has no way to distinguish which human originally created either pod</button>
+    </div>
+    <p class="why">A pod's RBAC identity is entirely its ServiceAccount, with no memory of who applied the manifest that created it. Two pods sharing a ServiceAccount are, from RBAC's perspective, indistinguishable — which is exactly why scoping ServiceAccounts narrowly per workload matters more than it might seem.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">What is the concrete security improvement of a bound, projected service account token over the old static Secret-based token?</p>
+    <div class="opts">
+      <button class="opt">It's cryptographically tied to a specific pod (and optionally audience), expires automatically within a short window, and stops being valid the moment that pod is deleted — a copy stolen from disk has a short, bounded useful life</button>
+      <button class="opt">It's stored in a different Kubernetes object type, which is harder for an attacker to query</button>
+      <button class="opt">It uses a longer cryptographic key length than the old format</button>
+      <button class="opt">It removes the need for RBAC entirely, replacing it with token-embedded permissions</button>
+    </div>
+    <p class="why">The old static token had no expiry and no binding to the pod using it — once copied, it worked forever, from anywhere. A bound token's short lifetime and pod-specific binding sharply limits what a single stolen token can actually be used for, and for how long.</p>
+  </div>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">A pod is deployed with no serviceAccountName specified. What identity does it authenticate to the API server as?</p>
+    <div class="opts">
+      <button class="opt">No identity at all — it cannot make API server requests</button>
+      <button class="opt">The identity of whoever applied the manifest</button>
+      <button class="opt">The namespace's "default" ServiceAccount, automatically — which, depending on what's bound to it, may grant more access than the workload actually needs</button>
+      <button class="opt">A randomly generated, single-use ServiceAccount created just for that pod</button>
+    </div>
+    <p class="why">Every namespace's default ServiceAccount is used automatically for any pod that doesn't specify one, and it is mounted by default too. On clusters where that account has any real permissions bound to it, every such pod inherits them — which is precisely why it isn't a safe default to leave alone.</p>
+  </div>
+</div>
+
+<h2>20.7 What to carry into Chapter 21</h2>
+<ul>
+<li>RBAC answers exactly one question — is this (user or group, verb, resource, namespace) combination allowed — and is entirely default-deny with no explicit-deny concept.</li>
+<li>A Role/ClusterRole lists permissions; a RoleBinding/ClusterRoleBinding grants them to a subject; neither does anything alone, and the four combinations differ in scope, not mechanism.</li>
+<li>A pod's identity is its ServiceAccount, never the human who created it — RBAC cannot see past that boundary.</li>
+<li>Bound, projected tokens replaced long-lived static ones specifically to bound how long and how widely a stolen token stays useful.</li>
+</ul>
+
+<p>RBAC decides who may act on the API. The next chapter is about what happens to an object <em>after</em> that check passes and before it's stored — the admission stage from Chapter 2, examined properly this time.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +943,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1165,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>

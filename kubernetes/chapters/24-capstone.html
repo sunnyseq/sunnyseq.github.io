@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Linux Internals — kernel, processes, isolation</title>
+<title>24 · Capstone: apply to answer — Kubernetes Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,184 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="24">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part VI &nbsp;&middot;&nbsp; Operating it &nbsp;&middot;&nbsp; Chapter 24</p>
+  <h1>Capstone: apply to answer</h1>
+  <p class="lede">One kubectl apply, fourteen stages, every one of them covered in an earlier chapter on its own. This is the whole system, in the order it actually runs, with nothing left implicit.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>24.1 One command, twenty-three chapters</h2>
+
+<p>Every chapter in this course examined one control loop, one component, one failure mode in isolation — the only honest way to actually understand any one of them well enough to debug it. The cost of that approach is that it's easy to lose the shape of the whole system in the process. This chapter pays that cost back: one <code>kubectl apply</code>, for one Deployment and one Service fronted by an Ingress, traced through every layer this course covered, in the order it actually happens, with nothing left implicit.</p>
+
+<pre><code>kubectl apply -f web.yaml
+# a Deployment (3 replicas), a Service, and an Ingress, applied together</code></pre>
+
+<h2>24.2 The full trace, stage by stage</h2>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · kubectl apply to a packet arriving</span><span id="capstat">stage 1 / 14</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <button class="chip" id="capprev">&larr; Previous</button>
+      <button class="chip" id="capnext">Next &rarr;</button>
+      <button class="chip" id="capfirst">Restart</button>
+    </div>
+    <div class="out" id="capout" style="min-height:140px"></div>
+  </div>
 </div>
 
-<div id="toc"></div>
+<script>
+(function(){
+  var STAGES = [
+    {t:'1 · The request reaches the API server', ch:'Ch. 2',
+     d:'kubectl serialises the three objects and sends them over mTLS. TLS terminates, the client certificate or bearer token is checked — authentication, the first of the request path\'s six stages.'},
+    {t:'2 · Authorization', ch:'Ch. 20',
+     d:'RBAC checks whether this identity may create Deployments, Services and Ingresses in this namespace. A pure (user, verb, resource, namespace) lookup, independent of what the objects actually contain.'},
+    {t:'3 · Admission', ch:'Ch. 21',
+     d:'Mutating webhooks run first (perhaps injecting a sidecar or a default toleration), then validating webhooks and any ValidatingAdmissionPolicy judge the final, fully-mutated objects — schema-valid and policy-compliant, or rejected here before anything is stored.'},
+    {t:'4 · Written to etcd', ch:'Ch. 3',
+     d:'Each object becomes a new revision in etcd\'s single ordered log, guarded by an optimistic-concurrency check on resourceVersion. The write is now durable and watchable.'},
+    {t:'5 · Controllers notice', ch:'Ch. 4',
+     d:'The Deployment controller\'s shared informer receives a watch event, enqueues a bare key, and its reconcile loop creates a new ReplicaSet, which in turn creates 3 Pod objects — all still unscheduled, spec.nodeName empty.'},
+    {t:'6 · The scheduler places each pod', ch:'Ch. 5',
+     d:'Filter narrows every node to the feasible set; score ranks what\'s left. Each pod gets exactly one write: spec.nodeName. The scheduler is now done with all three pods.'},
+    {t:'7 · The kubelet takes over', ch:'Ch. 7',
+     d:'Each node\'s kubelet notices a pod newly bound to it and begins its own per-node reconcile loop — this pod now exists in a world the scheduler never touches again.'},
+    {t:'8 · The network sandbox is created', ch:'Ch. 9',
+     d:'The kubelet asks the CNI plugin to set up the pod\'s network namespace and assign it an IP from this node\'s slice of the cluster CIDR — before any container inside it has started.'},
+    {t:'9 · The container runtime does the rest', ch:'Ch. 8',
+     d:'Via CRI, containerd pulls the image (skipping any layer already cached), assembles it with the snapshotter, and runc creates the actual isolated process — init containers first, in order, then the main container.'},
+    {t:'10 · Probes and phase', ch:'Ch. 6',
+     d:'Startup, then readiness and liveness probing begins. The pod\'s phase moves to Running well before its Ready condition necessarily goes True — those are different facts, checked differently.'},
+    {t:'11 · The Service\'s endpoints update', ch:'Ch. 10',
+     d:'The moment (and only the moment) a pod\'s Ready condition is True, its IP appears in an EndpointSlice. kube-proxy notices and writes a rewrite rule on every node — the ClusterIP now resolves to this pod as one of its possible backends.'},
+    {t:'12 · DNS reflects it immediately', ch:'Ch. 11',
+     d:'CoreDNS synthesises this Service\'s A record from the same live EndpointSlice state — no separate propagation step, no delay beyond what step 11 already took.'},
+    {t:'13 · The Ingress controller picks it up', ch:'Ch. 12',
+     d:'Watching the Ingress object, the controller (already running) updates its own routing config to send matching host/path traffic to this Service — TLS terminates here, using a certificate cert-manager keeps current.'},
+    {t:'14 · A real request arrives', ch:'Ch. 9, 13',
+     d:'An external client\'s HTTPS request hits the Ingress, gets routed to the Service\'s rewrite rule, lands on one specific pod\'s IP — reachable at all only because of the flat-networking guarantee from Chapter 9, and only across whatever NetworkPolicy (Chapter 13) currently permits.'}
+  ];
+  var i = 0;
+  var out = document.getElementById('capout');
+  var stat = document.getElementById('capstat');
+  function render(){
+    var s = STAGES[i];
+    out.innerHTML = '<div style="font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--server);margin-bottom:8px">' + s.ch + '</div>' +
+      '<h3 style="margin:0 0 10px">' + s.t + '</h3>' +
+      '<p style="margin:0">' + s.d + '</p>';
+    stat.textContent = 'stage ' + (i+1) + ' / ' + STAGES.length;
+  }
+  document.getElementById('capnext').addEventListener('click', function(){ if (i < STAGES.length-1) { i++; render(); } });
+  document.getElementById('capprev').addEventListener('click', function(){ if (i > 0) { i--; render(); } });
+  document.getElementById('capfirst').addEventListener('click', function(){ i = 0; render(); });
+  render();
+})();
+</script>
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+<h2>24.3 What was never actually separate</h2>
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+<p>Looking at all fourteen stages at once, a pattern this course kept returning to is easier to see clearly than it was one chapter at a time: nearly every stage is the identical shape — something declares desired state, something else watches and reconciles observed state toward it, and the gap between the two is never assumed closed, only continuously re-checked. The API server's admission chain, the Deployment controller, the scheduler, the kubelet, kube-proxy, CoreDNS and the Ingress controller are seven different pieces of software, written by different teams, that have never needed to call each other directly — every one of them only ever watches objects and writes objects, and the whole system holds together because that contract is uniform everywhere.</p>
 
+<h2>24.4 Lab · trace all fourteen stages on a real cluster</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · watching every layer react, in order</span><button data-copy>Copy</button></div>
+<pre><code># Apply and immediately start watching — in separate terminals, watch
+# each layer react to the same one command
+kubectl apply -f web.yaml
+
+# Terminal 2: the object's own lifecycle
+kubectl get deploy,rs,pods -l app=web -w
+
+# Terminal 3: scheduling decisions as they happen
+kubectl get events --field-selector reason=Scheduled -w
+
+# Terminal 4: readiness flipping, and endpoints updating the instant it does
+kubectl get pods -l app=web -o wide -w
+kubectl get endpointslices -l kubernetes.io/service-name=web -w
+
+# Terminal 5: confirm DNS reflects current endpoints with no separate delay
+watch -n1 'kubectl exec debug-pod -- nslookup web.default.svc.cluster.local'
+
+# Confirm the generation/observedGeneration gap from Chapter 1 closing,
+# live, for this exact rollout
+watch -n1 "kubectl get deploy web -o jsonpath='{.metadata.generation} {.status.observedGeneration}'"
+
+# The full path, backwards, from a live request
+kubectl exec debug-pod -- curl -sv https://web.example.com/
+# every hop that request took is a stage in the walkthrough above</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Final knowledge check</h3>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">At which stage does a pod's IP first become reachable through its Service's ClusterIP?</p>
+    <div class="opts">
+      <button class="opt">The moment the pod is scheduled to a node</button>
+      <button class="opt">The moment the container starts running</button>
+      <button class="opt">The moment the pod's Ready condition becomes True — not before, regardless of phase — since that's what controls its presence in the EndpointSlice kube-proxy reads</button>
+      <button class="opt">The moment the Service object itself is created</button>
+    </div>
+    <p class="why">Running and Ready are different facts, and only Ready gates EndpointSlice membership. A pod can be scheduled, running, and even serving traffic on its own IP directly, while still being completely absent from its Service's rotation until readiness says otherwise.</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">What single architectural property do the API server's admission chain, the Deployment controller, the scheduler, the kubelet, kube-proxy and the Ingress controller all share?</p>
+    <div class="opts">
+      <button class="opt">Each only ever watches objects and writes objects — none calls another directly, and the system holds together because every component honours the same watch-and-reconcile contract</button>
+      <button class="opt">They are all part of the same binary, compiled together</button>
+      <button class="opt">They all require direct network access to each other's internal APIs</button>
+      <button class="opt">They share a single combined work queue</button>
+    </div>
+    <p class="why">This is the thread running under this entire course. Wildly different components, written independently, cooperate with zero direct calls between most of them — only a shared object model and the discipline of reconciling toward it, which is what let this system add an Ingress controller or a CNI plugin from a totally different vendor without anything else needing to change.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Why does a pod's network namespace get created (Chapter 9) before its main container has even started (Chapter 8)?</p>
+    <div class="opts">
+      <button class="opt">It doesn't — networking is set up only after every container is confirmed running</button>
+      <button class="opt">The scheduler requires a network namespace to exist before it will bind a pod to a node</button>
+      <button class="opt">This ordering is an implementation detail with no functional reason behind it</button>
+      <button class="opt">A pod's IP address is a property of its network sandbox, not of any individual container — the sandbox has to exist first so that init containers, sidecars, and the main container all join the same, already-addressable network namespace from the moment each one starts</button>
+    </div>
+    <p class="why">Pod-level networking exists independently of any one container specifically so that every container sharing that pod agrees on one IP and one loopback from the start — which only works if the sandbox is the first thing created, not something bolted on after a container is already running.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">A request reaches the Ingress, is routed to the correct Service, but times out reaching any actual pod. RBAC, admission, scheduling and readiness all check out fine. What is the most likely remaining explanation this course covered?</p>
+    <div class="opts">
+      <button class="opt">The Deployment's revisionHistoryLimit is set too low</button>
+      <button class="opt">A NetworkPolicy is blocking ingress traffic to the pod from the Ingress controller's namespace — a restriction layered independently on top of the flat-networking guarantee that made the pod reachable at all</button>
+      <button class="opt">The pod's QoS class is BestEffort</button>
+      <button class="opt">CoreDNS's ndots setting is misconfigured</button>
+    </div>
+    <p class="why">Every earlier stage succeeding doesn't rule out Chapter 13's layer, which sits on top of and independent from all of them. Reachability (Ch. 9) and permission to actually connect (Ch. 13) are different questions this course was careful to keep separate — a NetworkPolicy denying exactly this traffic is a clean, common explanation once everything upstream already checks out.</p>
+  </div>
+</div>
+
+<h2>24.5 What this course was actually about</h2>
+
+<p>Twenty-four chapters, and not one of them was really about YAML. The declarative model from Chapter 1 — desired state, observed state, a loop that never assumes the gap is closed — is the only idea in this entire course. The API server, etcd, the scheduler, the kubelet, every networking and storage mechanism, RBAC, admission, CRDs: all of it is that one idea, applied again at a different layer, watching a different pair of states. Once that shape is visible, a component you've never read the source of is no longer opaque — you already know the two questions to ask: what is its desired state, and what is it comparing that against.</p>
+
+<p>That's the whole course. Where you go from here is real infrastructure, with all the specifics this course deliberately stayed vendor-neutral about — a specific CNI plugin's quirks, a specific cloud's managed Kubernetes offering, a specific ecosystem of operators. The shape underneath all of it won't change.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +920,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1142,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>

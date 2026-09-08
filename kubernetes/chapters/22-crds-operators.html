@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Linux Internals — kernel, processes, isolation</title>
+<title>22 · CRDs and operators — Kubernetes Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,36 +313,210 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-linux">
+<body class="course-kubernetes" data-chapter="22">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
 <main class="content">
+<nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 id="hero"></h1>
-  <p class="lede" id="blurb"></p>
+  <p class="eyebrow">Part VI &nbsp;&middot;&nbsp; Operating it &nbsp;&middot;&nbsp; Chapter 22</p>
+  <h1>CRDs and operators</h1>
+  <p class="lede">A CustomResourceDefinition doesn't add a feature to Kubernetes — it adds a new type the same watch-and-reconcile machinery from Chapter 1 already knows how to work with. This chapter is that extension point, and the two mechanisms that keep what it creates from leaking or getting stuck.</p>
 </header>
 
 <div class="col">
-  <p style="font-size:.95rem;color:var(--ink-soft)" id="intro"></p>
+
+<h2>22.1 A CRD is a schema, registered the same way everything else is</h2>
+
+<p>Every object this course has covered — Pods, Deployments, Services — is a built-in type the API server ships knowing about. A <strong>CustomResourceDefinition</strong> registers a brand-new one at runtime: submit a CRD for <code>Database</code>, and the API server immediately starts accepting, storing, validating and serving <code>Database</code> objects exactly the way it does Pods — <code>kubectl get databases</code> works, RBAC rules can name it, watches can be opened against it, and it gets its own <code>spec</code> and <code>status</code> split, all without a single line of API server code changing. This is the same GVK/GVR addressing from Chapter 2, extended at runtime rather than compiled in.</p>
+
+<p>A CRD, by itself, is inert in exactly the way a NetworkPolicy is inert without a CNI plugin (Chapter 13), or an Ingress is inert without a controller (Chapter 12): it defines a schema and gets you storage, but nothing reconciles a <code>Database</code> object into an actual running database unless something is watching for one. That something is an <strong>operator</strong>.</p>
+
+<h2>22.2 An operator is Chapter 1's loop, pointed at your own resource</h2>
+
+<p>Strip away the unfamiliar name and an operator is exactly the reconciliation loop from Chapter 1 and the informer/work-queue machinery from Chapter 4, applied to a CRD instead of a built-in type. It watches <code>Database</code> objects, compares each one's <code>spec</code> (what you asked for) against real, observed state (what actually exists — a StatefulSet, some Secrets, a backup schedule), and reconciles the gap. Nothing about the loop itself is different; what's different is that the "resource" being reconciled is one you defined, and the "real world" it reconciles against might be several other Kubernetes objects, an external cloud API, or both at once.</p>
+
+<pre><code>kind: Database          # your CRD
+spec:
+  engine: postgres
+  version: "16"
+  replicas: 3
+status:                 # written by your operator, same split as everything else
+  phase: Provisioning
+  readyReplicas: 1</code></pre>
+
+<h2>22.3 Owner references: garbage collection without a controller lifting a finger</h2>
+
+<p>An operator reconciling a <code>Database</code> typically creates several other objects underneath it — a StatefulSet, a Service, some Secrets. Deleting the <code>Database</code> object should clean all of those up, and the mechanism for that is not the operator noticing the deletion and manually deleting each child. It's an <strong>owner reference</strong>: every child object created records the <code>Database</code>'s UID as its owner, and a built-in <strong>garbage collector controller</strong> — generic, with no knowledge of what a Database even is — watches for owner objects disappearing and deletes every object that named it as owner.</p>
+
+<div class="callout">
+  <span class="tag">Why this is more than a convenience</span>
+  <p>Because garbage collection is generic and owner-reference-driven, it works identically for every operator that ever gets installed, without any of them writing cleanup code. It's the same pattern Kubernetes itself already uses natively — a ReplicaSet's pods carry an owner reference back to it (which is how deleting a Deployment cascades all the way down to actual pods disappearing), and a Job's pods work the same way. Operators aren't granted a special capability here; they're simply using a mechanism every built-in controller already depends on.</p>
 </div>
 
-<div id="toc"></div>
+<h2>22.4 Finalizers: the opposite problem — cleanup that must happen first</h2>
 
-<p id="empty" class="col" style="display:none;color:var(--ink-soft);font-size:.95rem">
-  Nothing in this course matches that search. Clear the box on the left to see all chapters again.
-</p>
+<p>Owner references handle cleanup <em>after</em> deletion. Some resources need cleanup <em>before</em> the object can actually disappear — releasing a cloud load balancer's external IP, taking a final backup, deregistering from an external system. A <strong>finalizer</strong> is a string on an object's metadata that tells the API server: don't actually remove this object until whoever added this finalizer has removed it themselves.</p>
 
-<p class="col" style="margin-top:52px;font-size:.86rem;color:var(--ink-soft)">
-  Chapters marked <em>in progress</em> are indexed, searchable and cross-linked, but not yet written.
-  Any written chapter prints cleanly &mdash; use your browser&rsquo;s print dialog to save it as a PDF.
-</p>
+<pre><code>metadata:
+  finalizers:
+  - database.example.com/backup-before-delete
+  deletionTimestamp: "2025-01-15T10:00:00Z"   # deletion requested...
+  # ...but the object stays fully present, watchable, and gettable
+  # until the operator finishes its work and removes the finalizer</code></pre>
 
+<p>This is why <code>kubectl delete</code> on an object with a finalizer can appear to hang — the object isn't stuck, it's in a deliberate, visible waiting state: <code>deletionTimestamp</code> is set, but the object remains fully present until every finalizer naming it is removed. A controller that crashes after setting a finalizer but before ever clearing it leaves that object stuck in exactly this state indefinitely — a common, real operational failure mode, and precisely why a finalizer should only ever be added by code that reliably removes it again.</p>
+
+<h2>22.5 Watch a Database object's actual lifecycle</h2>
+
+<div class="demo">
+  <div class="demohead"><span>Interactive · CRD, owner references, and a finalizer</span><span id="crdstat">no Database yet</span></div>
+  <div class="demobody">
+    <div class="ctl">
+      <button class="chip" id="crdcreate">Create Database "orders-db"</button>
+      <button class="chip" id="crddelete">Delete it</button>
+      <button class="chip" id="crdfinalize">Operator finishes cleanup (removes finalizer)</button>
+      <button class="chip" id="crdreset">Reset</button>
+    </div>
+    <div class="out" id="crdlog" style="max-height:220px;overflow-y:auto"></div>
+  </div>
+  <div class="demonote">Notice the object doesn't disappear the instant you delete it — it sits with deletionTimestamp set and the finalizer still present, exactly as visible and gettable as before, until the operator explicitly finishes and removes its finalizer.</div>
+</div>
+
+<script>
+(function(){
+  var exists = false, deleting = false, finalizerPresent = false;
+  var log = document.getElementById('crdlog');
+  var stat = document.getElementById('crdstat');
+  function line(t,c){ var d=document.createElement('div'); if(c)d.style.color=c; d.innerHTML=t; log.insertBefore(d, log.firstChild); }
+
+  document.getElementById('crdcreate').addEventListener('click', function(){
+    if (exists) { line('Database "orders-db" already exists.', '#C1121F'); return; }
+    exists = true; deleting = false; finalizerPresent = true;
+    stat.textContent = 'Database running';
+    line('Database "orders-db" created &middot; operator adds finalizer "database.example.com/backup-before-delete"');
+    line('Operator provisions StatefulSet + Service + Secret, each with an ownerReference to "orders-db"');
+  });
+
+  document.getElementById('crddelete').addEventListener('click', function(){
+    if (!exists) { line('Nothing to delete.', '#C1121F'); return; }
+    if (deleting) { line('Already deleting — waiting on the finalizer.', '#C1121F'); return; }
+    deleting = true;
+    stat.textContent = 'deletionTimestamp set, waiting on finalizer';
+    line('kubectl delete database orders-db &middot; deletionTimestamp is set, but the object is <strong>still present</strong> — the finalizer is still there', '#E2622A');
+  });
+
+  document.getElementById('crdfinalize').addEventListener('click', function(){
+    if (!deleting) { line('Nothing is pending deletion.', '#C1121F'); return; }
+    finalizerPresent = false;
+    line('Operator finishes its final backup, removes the finalizer &middot; the object is <strong style="color:#0B8A5B">now actually deleted</strong>');
+    line('Garbage collector notices the owner is gone &middot; StatefulSet, Service and Secret are all deleted via their ownerReferences &mdash; the operator wrote none of that cleanup logic itself', '#0B8A5B');
+    exists = false; deleting = false;
+    stat.textContent = 'no Database — everything cleaned up';
+  });
+
+  document.getElementById('crdreset').addEventListener('click', function(){
+    exists = false; deleting = false; finalizerPresent = false;
+    log.innerHTML = ''; stat.textContent = 'no Database yet';
+  });
+})();
+</script>
+
+<h2>22.6 Lab · watch owner references and finalizers on real objects</h2>
+
+<div class="lab">
+  <div class="labhead"><span>Shell · CRDs, garbage collection and stuck finalizers</span><button data-copy>Copy</button></div>
+<pre><code># Every custom type this cluster's API actually knows about
+kubectl get crds
+
+# A ReplicaSet's pods, and the owner reference tying them together -
+# built-in Kubernetes using the exact mechanism this chapter describes
+kubectl get pod web-abc -o jsonpath='{.metadata.ownerReferences}'
+
+# Delete a Deployment and watch the cascade happen via owner references,
+# not via any code the Deployment controller wrote specifically for this
+kubectl delete deployment web
+kubectl get replicasets,pods -l app=web   # gone, cascaded
+
+# Find an object that's stuck deleting - the classic finalizer symptom
+kubectl get namespace stuck-ns -o jsonpath='{.status.phase} {.spec.finalizers}'
+kubectl get database orders-db -o jsonpath='{.metadata.deletionTimestamp} {.metadata.finalizers}'
+
+# Only as a last resort, and only once you understand why the finalizer
+# never cleared - force-remove a stuck finalizer
+kubectl patch database orders-db -p '{"metadata":{"finalizers":[]}}' --type=merge
+# this skips whatever cleanup the finalizer existed to guarantee -
+# know what you're giving up before running it
+
+# Watch an operator's own reconcile loop react to your CRD directly
+kubectl logs -n operator-system deploy/database-operator -f | grep orders-db</code></pre>
+</div>
+
+<div class="quiz">
+  <h3>Knowledge check</h3>
+
+  <div class="q" data-answer="2">
+    <p class="qtext">A CustomResourceDefinition for "Database" is installed, but no operator is running. What happens when a Database object is created?</p>
+    <div class="opts">
+      <button class="opt">The API server rejects it since no controller can act on it</button>
+      <button class="opt">A default operator is automatically started</button>
+      <button class="opt">A generic warning event is created</button>
+      <button class="opt">It is accepted and stored normally, fully queryable and watchable — but nothing reconciles it into any actual running database, exactly as an Ingress does nothing without a controller</button>
+    </div>
+    <p class="why">A CRD only registers a schema and gets you storage/API mechanics identical to any built-in type. Whether anything acts on objects of that type is a separate, independent concern — the same interface/implementation split this course has seen repeatedly (CNI, CRI, Ingress controllers).</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">An operator creates a StatefulSet, a Service, and a Secret while reconciling a Database object, each with an ownerReference pointing to the Database. The Database is then deleted. What deletes the three child objects?</p>
+    <div class="opts">
+      <button class="opt">A generic, built-in garbage collector controller that watches for owner objects disappearing and deletes anything naming them as owner — the same mechanism a Deployment's cascade to its pods already uses</button>
+      <button class="opt">The operator must explicitly delete each child object itself in its reconcile function</button>
+      <button class="opt">The objects become orphaned and require manual cleanup</button>
+      <button class="opt">etcd's compaction process removes them automatically</button>
+    </div>
+    <p class="why">Owner-reference-driven garbage collection is generic infrastructure, not something each operator implements. It's the exact mechanism already responsible for a Deployment's deletion cascading down to its ReplicaSet and pods — an operator author gets it for free by setting owner references correctly.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">A kubectl delete on an object with a finalizer appears to hang — the object still shows up in kubectl get minutes later. What is actually happening?</p>
+    <div class="opts">
+      <button class="opt">The delete request failed and should be retried</button>
+      <button class="opt">The object is corrupted and needs to be force-deleted</button>
+      <button class="opt">etcd has not yet processed the deletion</button>
+      <button class="opt">This is expected: deletionTimestamp is set but the object remains fully present until whatever added the finalizer removes it — if the responsible controller crashed or has a bug, the object can stay in this state indefinitely</button>
+    </div>
+    <p class="why">A finalizer is a deliberate block on actual removal, not a bug. The object isn't "stuck" in an error sense — it's precisely and visibly waiting on whoever added the finalizer to finish their cleanup and remove it, which becomes a real operational problem only when that controller never does.</p>
+  </div>
+
+  <div class="q" data-answer="1">
+    <p class="qtext">What is the core difference between what owner references and finalizers each guarantee?</p>
+    <div class="opts">
+      <button class="opt">Owner references are namespaced; finalizers are cluster-scoped</button>
+      <button class="opt">Owner references guarantee cleanup happens automatically after an object is deleted; finalizers guarantee cleanup happens before an object is allowed to actually disappear</button>
+      <button class="opt">They are two names for the same mechanism</button>
+      <button class="opt">Owner references apply only to built-in types; finalizers apply only to CRDs</button>
+    </div>
+    <p class="why">The two solve opposite-direction problems: owner references drive garbage collection of dependents once a parent is gone (after), while finalizers block an object's actual removal until some required cleanup work has completed (before). A sophisticated operator often uses both — finalizers for its own pre-delete work, owner references for everything it creates.</p>
+  </div>
+</div>
+
+<h2>22.7 What to carry into Chapter 23</h2>
+<ul>
+<li>A CRD extends the API's schema at runtime — everything about GVK addressing, storage, RBAC and watches works identically to a built-in type from the moment it's registered.</li>
+<li>An operator is Chapter 1's reconciliation loop and Chapter 4's informer pattern, pointed at a CRD instead of a built-in resource — no new mechanism, just a new target.</li>
+<li>Owner references drive generic, built-in garbage collection after deletion; this is the same mechanism behind a Deployment's cascade to its pods.</li>
+<li>Finalizers block actual deletion until required cleanup finishes — visible as a deletionTimestamp with the object still fully present, and a real risk of getting stuck if the responsible controller never clears it.</li>
+</ul>
+
+<p>Every mechanism this course has covered eventually shows up as a symptom in a cluster that isn't behaving — a pod that won't start, a rollout that won't finish, an object that won't delete. The next chapter is a map from that symptom back to its cause.</p>
+
+<div class="donebar"></div>
+<nav class="chapfoot"></nav>
+</div>
 </main>
 </div>
-
 <script>
 /* ============================================================
    The library manifest: every course, every chapter.
@@ -772,7 +946,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "linux"; window.DEPTH = 1;</script>
+<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
@@ -994,64 +1168,6 @@ window.getCourse = function (id) {
   else init();
 })();
 
-</script>
-<script>
-(function(){
-  var course = getCourse();
-  var written = course.chapters.filter(function(c){ return !c.soon; }).length;
-
-  document.getElementById('eyebrow').textContent =
-    course.subtitle + '  \u00B7  ' + course.chapters.length + ' chapters';
-  document.getElementById('hero').textContent = course.hero;
-  document.getElementById('blurb').textContent = course.blurb;
-  document.getElementById('intro').innerHTML = written
-    ? 'Every written chapter carries a live interactive model, copy-ready shell labs, and a knowledge check. '
-      + 'Use the search on the left to jump to a topic, or start at chapter one and go straight through.'
-    : 'The outline below is final and cross-linked. Chapters are being written in order; '
-      + 'the interactive model in each one is the slow part and the point.';
-
-  var toc = document.getElementById('toc');
-
-  function itemHTML(c){
-    var done = Progress.isDone(c.n, course.id);
-    var cls = 'tocitem' + (done ? ' done' : '') + (c.soon ? ' soon' : '');
-    var state = c.soon ? 'In progress' : (done ? 'Complete' : 'Not started');
-    /* A cross-course reference can itself be a live <a>, and HTML forbids
-       nesting an <a> inside another <a> (the outer one silently closes at
-       the inner tag, corrupting everything after it). So the whole row is
-       always a <div>, and a full-cover "stretched link" handles click-to-
-       open navigation instead — the xref link sits above it (z-index,
-       see .tocstretch/.xref in <style>) and stays independently clickable. */
-    var stretch = c.soon ? '' : '<a class="tocstretch" href="chapters/' + c.file + '" aria-label="' + c.title + '"></a>';
-    var inner = stretch +
-      '<span class="tocnum">' + (c.n < 10 ? '0' : '') + c.n + '</span>' +
-      '<span><span class="toctitle">' + c.title + '</span>' +
-      '<span class="tocdesc">' + c.desc + '</span>' + xrefHTML(c, course.id) + '</span>' +
-      '<span class="tocstate">' + state + '</span>';
-    return '<div class="' + cls + '">' + inner + '</div>';
-  }
-
-  /* core.js calls this whenever the side-nav search or progress changes */
-  window.onCourseFilter = function(f){
-    var html = '', shown = 0;
-    course.parts.forEach(function(p){
-      var chs = course.chapters.filter(function(c){
-        if (c.n < p.range[0] || c.n > p.range[1]) return false;
-        if (!f) return true;
-        return (c.title + ' ' + c.desc + ' ' + c.keys).toLowerCase().indexOf(f) > -1;
-      });
-      if (!chs.length) return;
-      shown += chs.length;
-      html += '<p class="tocpart">Part ' + p.id + ' &nbsp;\u00B7&nbsp; ' + p.name + '</p><ul class="toc">';
-      chs.forEach(function(c){ html += '<li>' + itemHTML(c) + '</li>'; });
-      html += '</ul>';
-    });
-    toc.innerHTML = html;
-    document.getElementById('empty').style.display = shown ? 'none' : 'block';
-  };
-
-  window.onCourseFilter('');
-})();
 </script>
 </body>
 </html>
