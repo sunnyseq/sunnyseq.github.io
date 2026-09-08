@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>12 · Ingress and Gateway API — Inside Out</title>
+<title>12 · Ingress and Gateway API — Kubernetes Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -341,7 +341,7 @@ svg{max-width:100%;height:auto;display:block}
 
 <p>An Ingress is usually where a cluster's external TLS terminates — the controller holds the private key and certificate, decrypts incoming HTTPS, and forwards plain HTTP to the backend Service on the cluster's internal, already-trusted network. This is a deliberate simplification: application pods don't each need their own certificate or TLS-handling code for ordinary external traffic, and certificate rotation is a concern for the Ingress controller alone rather than for every workload behind it.</p>
 
-<p>The certificate and key themselves live in an ordinary <code>Secret</code>, referenced from the Ingress object by name — and how that Secret's contents get created and kept current, automatically, from a real certificate authority, is <code>cert-manager</code>'s job: it watches <code>Certificate</code> objects, talks to an ACME issuer, and writes the resulting cert/key pair into exactly the Secret the Ingress is already pointing at, renewing it before expiry with no manual intervention. Everything about the ACME protocol, certificate issuance and renewal itself is The Wire's subject; this is only where that machinery's output gets consumed.</p>
+<p>The certificate and key themselves live in an ordinary <code>Secret</code>, referenced from the Ingress object by name — and how that Secret's contents get created and kept current, automatically, from a real certificate authority, is <code>cert-manager</code>'s job: it watches <code>Certificate</code> objects, talks to an ACME issuer, and writes the resulting cert/key pair into exactly the Secret the Ingress is already pointing at, renewing it before expiry with no manual intervention. Everything about the ACME protocol, certificate issuance and renewal itself is Security & Cryptography's subject; this is only where that machinery's output gets consumed.</p>
 
 <h2>12.3 SNI: choosing a certificate before the request is even readable</h2>
 
@@ -499,7 +499,7 @@ kubectl get httproute -o yaml | grep -A5 "backendRefs:"</code></pre>
 <h2>12.7 What to carry into Chapter 13</h2>
 <ul>
 <li>An Ingress object is inert without a controller — Kubernetes standardises the description, not the routing behaviour any particular controller produces from it.</li>
-<li>TLS usually terminates at the Ingress; cert-manager keeps the backing Secret populated and current, separate from The Wire's coverage of how issuance itself works.</li>
+<li>TLS usually terminates at the Ingress; cert-manager keeps the backing Secret populated and current, separate from Security & Cryptography's coverage of how issuance itself works.</li>
 <li>SNI lets a controller pick the right certificate for a hostname before any part of the request is decrypted.</li>
 <li>Path-rule matching resolves by longest-prefix specificity, not by the order rules are written.</li>
 <li>Gateway API splits Ingress's bundled concerns into a platform-owned Gateway and application-owned HTTPRoutes, with typed rules replacing what used to require controller-specific annotations.</li>
@@ -521,7 +521,7 @@ kubectl get httproute -o yaml | grep -A5 "backendRefs:"</code></pre>
    xref: [{course, n, why}]  declares a cross-course link.
    ============================================================ */
 window.LIBRARY = {
-  title: "Field Notes",
+  title: "Systems Library",
   tagline: "Interactive courses on the systems underneath everything.",
 
   courses: [
@@ -529,8 +529,8 @@ window.LIBRARY = {
     {
       id: "the-wire",
       slug: "the-wire",
-      title: "The Wire",
-      subtitle: "Security \u00B7 Crypto \u00B7 TLS",
+      title: "Security & Cryptography",
+      subtitle: "Cryptography \u00B7 PKI \u00B7 TLS",
       hero: "Everything between saying it and being believed",
       blurb: "Computer security, cryptography, certificates and TLS, taught in dependency order. Each chapter's answer becomes the next chapter's question.",
       parts: [
@@ -631,8 +631,8 @@ window.LIBRARY = {
     {
       id: "kubernetes",
       slug: "kubernetes",
-      title: "Inside Out",
-      subtitle: "Kubernetes internals",
+      title: "Kubernetes Internals",
+      subtitle: "Control plane \u00B7 Networking \u00B7 Storage",
       hero: "What actually happens when you type kubectl apply",
       blurb: "Kubernetes as a set of cooperating control loops rather than a pile of YAML. Vendor-neutral throughout, from the API server request path to a packet reaching your pod.",
       parts: [
@@ -737,8 +737,8 @@ window.LIBRARY = {
     {
       id: "linux",
       slug: "linux",
-      title: "Under the Hood",
-      subtitle: "Linux internals",
+      title: "Linux Internals",
+      subtitle: "Kernel \u00B7 Processes \u00B7 Isolation",
       hero: "The machine your abstractions are standing on",
       blurb: "Processes, memory, filesystems and isolation, from the syscall boundary down. Part III is the foundation every container runtime is built from.",
       parts: [
@@ -826,8 +826,8 @@ window.LIBRARY = {
     {
       id: "microservices",
       slug: "microservices",
-      title: "Loosely Coupled",
-      subtitle: "Microservices · Architecture · Distributed systems",
+      title: "Microservices Architecture",
+      subtitle: "Distributed systems · APIs · Resilience",
       hero: "One system, cut into pieces that fail alone instead of together",
       blurb: "Service boundaries, APIs, and the distributed-systems failure modes a monolith never had to think about — taught through the resilience and coordination patterns that keep many small things behaving like one reliable one.",
       parts: [
@@ -883,8 +883,8 @@ window.LIBRARY = {
     {
       id: "containers",
       slug: "containers",
-      title: "Shipping Container",
-      subtitle: "Containers · Images · Supply chain",
+      title: "Containers & Images",
+      subtitle: "Docker · OCI · Supply chain",
       hero: "What actually ships, and everything that has to be true about it before it does",
       blurb: "Everything between a Dockerfile and an image you'd trust in production — building, layering, scanning, signing and distributing a container image, independent of any particular orchestrator running it.",
       parts: [

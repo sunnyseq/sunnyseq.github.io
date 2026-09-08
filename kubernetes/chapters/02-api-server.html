@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>2 · The API server — Inside Out</title>
+<title>2 · The API server — Kubernetes Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -588,7 +588,7 @@ kubectl auth can-i delete deployments -n kube-system --as=you@example.com</code>
    xref: [{course, n, why}]  declares a cross-course link.
    ============================================================ */
 window.LIBRARY = {
-  title: "Field Notes",
+  title: "Systems Library",
   tagline: "Interactive courses on the systems underneath everything.",
 
   courses: [
@@ -596,8 +596,8 @@ window.LIBRARY = {
     {
       id: "the-wire",
       slug: "the-wire",
-      title: "The Wire",
-      subtitle: "Security \u00B7 Crypto \u00B7 TLS",
+      title: "Security & Cryptography",
+      subtitle: "Cryptography \u00B7 PKI \u00B7 TLS",
       hero: "Everything between saying it and being believed",
       blurb: "Computer security, cryptography, certificates and TLS, taught in dependency order. Each chapter's answer becomes the next chapter's question.",
       parts: [
@@ -698,8 +698,8 @@ window.LIBRARY = {
     {
       id: "kubernetes",
       slug: "kubernetes",
-      title: "Inside Out",
-      subtitle: "Kubernetes internals",
+      title: "Kubernetes Internals",
+      subtitle: "Control plane \u00B7 Networking \u00B7 Storage",
       hero: "What actually happens when you type kubectl apply",
       blurb: "Kubernetes as a set of cooperating control loops rather than a pile of YAML. Vendor-neutral throughout, from the API server request path to a packet reaching your pod.",
       parts: [
@@ -804,8 +804,8 @@ window.LIBRARY = {
     {
       id: "linux",
       slug: "linux",
-      title: "Under the Hood",
-      subtitle: "Linux internals",
+      title: "Linux Internals",
+      subtitle: "Kernel \u00B7 Processes \u00B7 Isolation",
       hero: "The machine your abstractions are standing on",
       blurb: "Processes, memory, filesystems and isolation, from the syscall boundary down. Part III is the foundation every container runtime is built from.",
       parts: [
@@ -893,8 +893,8 @@ window.LIBRARY = {
     {
       id: "microservices",
       slug: "microservices",
-      title: "Loosely Coupled",
-      subtitle: "Microservices · Architecture · Distributed systems",
+      title: "Microservices Architecture",
+      subtitle: "Distributed systems · APIs · Resilience",
       hero: "One system, cut into pieces that fail alone instead of together",
       blurb: "Service boundaries, APIs, and the distributed-systems failure modes a monolith never had to think about — taught through the resilience and coordination patterns that keep many small things behaving like one reliable one.",
       parts: [
@@ -950,8 +950,8 @@ window.LIBRARY = {
     {
       id: "containers",
       slug: "containers",
-      title: "Shipping Container",
-      subtitle: "Containers · Images · Supply chain",
+      title: "Containers & Images",
+      subtitle: "Docker · OCI · Supply chain",
       hero: "What actually ships, and everything that has to be true about it before it does",
       blurb: "Everything between a Dockerfile and an image you'd trust in production — building, layering, scanning, signing and distributing a container image, independent of any particular orchestrator running it.",
       parts: [
