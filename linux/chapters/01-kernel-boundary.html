@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>23 · Debugging by symptom — Kubernetes Internals</title>
+<title>1 · The kernel boundary — Linux Internals</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -313,7 +313,7 @@ svg{max-width:100%;height:auto;display:block}
 
 </style>
 </head>
-<body class="course-kubernetes" data-chapter="23">
+<body class="course-linux" data-chapter="1">
 <div class="wire-rail"></div>
 <div class="layout">
 <aside class="sidenav" id="side"></aside>
@@ -321,212 +321,237 @@ svg{max-width:100%;height:auto;display:block}
 <nav class="chapnav"></nav>
 
 <header class="masthead">
-  <p class="eyebrow">Part VI &nbsp;&middot;&nbsp; Operating it &nbsp;&middot;&nbsp; Chapter 23</p>
-  <h1>Debugging by symptom</h1>
-  <p class="lede">Pending, CrashLoopBackOff, ImagePullBackOff, OOMKilled — each one is a phase Kubernetes observed, not a cause it's naming for you. This chapter is the discipline of reasoning backward from the symptom to the specific chapter actually responsible, instead of guessing.</p>
+  <p class="eyebrow">Part I &nbsp;&middot;&nbsp; Foundations &nbsp;&middot;&nbsp; Chapter 01</p>
+  <h1>The kernel boundary</h1>
+  <p class="lede">Every program you run believes it owns the machine — its own memory, its own devices, its own CPU. None of that is true. One piece of software actually touches the hardware, and everything else gets to ask it, politely, through exactly one door. This chapter is about that door: what's on each side of it, how a request gets through, and what it costs every single time one does.</p>
 </header>
 
 <div class="col">
 
-<h2>23.1 A symptom names a phase, not a cause</h2>
+<h2>1.1 Two worlds, one CPU</h2>
 
-<p>Every failure this chapter covers is a status Kubernetes shows you directly — <code>Pending</code>, <code>CrashLoopBackOff</code>, <code>ImagePullBackOff</code>, <code>OOMKilled</code> — and every one of them is compatible with several genuinely different root causes, from different parts of this entire course. The discipline this chapter is actually teaching isn't a list of fixes; it's a habit of reasoning backward from a symptom to the specific chapter's mechanism that's actually misbehaving, rather than guessing at the first plausible cause and changing things until something works.</p>
+<p>A modern CPU doesn't run all code with equal trust. x86-64 defines four privilege rings; Linux uses exactly two of them. <strong>Ring 0</strong> is kernel mode — the only privilege level allowed to execute privileged instructions: reprogram the MMU's page tables, mask interrupts, talk directly to a disk controller or NIC. <strong>Ring 3</strong> is user mode — where every process you run lives, including <code>bash</code>, your browser, and the language runtime under whatever program you wrote today. Code running in ring 3 physically cannot execute a privileged instruction. The CPU itself refuses, and raises a general protection fault if it tries.</p>
 
-<h2>23.2 Pending: the pod was never even placed</h2>
+<p>This isn't a permissions list the kernel maintains and could theoretically get wrong. It's enforced by the silicon, checked on every single instruction fetch, before the kernel's own logic is ever consulted. That's the whole point: user-mode code is untrusted by construction, not by policy, so a bug in your program can corrupt its own memory as badly as it likes and the rest of the machine is provably unaffected.</p>
 
-<p>A pod stuck <code>Pending</code> never made it past Chapter 5's scheduler at all — nothing about it starting, crashing, or misbehaving is even relevant yet. The one command that matters here is <code>kubectl describe pod</code>, whose events section states the scheduler's own reasons, per node, verbatim.</p>
-
-<table>
-<thead><tr><th>Event text contains</th><th>Cause</th><th>Chapter</th></tr></thead>
-<tbody>
-<tr><td>"Insufficient cpu" / "Insufficient memory"</td><td>No node has enough allocatable capacity for this pod's requests</td><td>5, 18</td></tr>
-<tr><td>"node(s) had taint ... that the pod didn't tolerate"</td><td>Every schedulable node is tainted against this pod</td><td>5</td></tr>
-<tr><td>"didn't match Pod's node affinity/selector"</td><td>A required affinity rule excludes every available node</td><td>5</td></tr>
-<tr><td>"pod has unbound immediate PersistentVolumeClaims"</td><td>A required PVC hasn't bound yet — often a StorageClass or provisioner problem</td><td>14</td></tr>
-</tbody>
-</table>
-
-<h2>23.3 ImagePullBackOff: scheduled, but the runtime never got a container to run</h2>
-
-<p>This is a Chapter 8 problem wearing a Chapter 6 phase — the pod is scheduled, but the container runtime can't produce a runnable container from the image reference given. <code>kubectl describe pod</code> again names the exact failure: <code>ErrImagePull</code> the first time, backing off into <code>ImagePullBackOff</code> on repeated failure. The specific error text is almost always sufficient on its own — "manifest unknown" means a bad tag or a typo, "unauthorized" or "pull access denied" means a missing or wrong <code>imagePullSecret</code>, and a plain timeout means a network or registry-reachability problem from that specific node.</p>
-
-<h2>23.4 CrashLoopBackOff: it started, and then it stopped, repeatedly</h2>
-
-<p>Everything Chapter 6 said about backoff is doing real work here: this phase specifically means the container started successfully and then exited — the opposite failure mode from ImagePullBackOff, which never got a container running at all. <code>kubectl logs --previous</code> is the load-bearing command, because the current container is usually already restarting again by the time you look, and its fresh logs may say nothing useful yet — <code>--previous</code> gets you the crashed instance's own output.</p>
-
-<div class="callout warn">
-  <span class="tag">The distinction that changes the fix entirely</span>
-  <p>An application that exits immediately with a stack trace is an application bug — no Kubernetes setting fixes it. An application still running fine when it gets killed is a probe misconfiguration (Chapter 6) — check whether a liveness probe is actually the one killing it, and whether it's pointed at something the container doesn't own (Chapter 6.2's warning). Conflating these two is the single most common wasted debugging session in this category: tuning probe timeouts against what is actually a crashing application, or rewriting application code to fix what is actually an overly aggressive liveness probe.</p>
+<div class="callout">
+  <span class="tag">Terminology, precisely</span>
+  <p><strong>Kernel space</strong> is the memory and privilege level the kernel itself runs in. <strong>User space</strong> is everywhere every process runs, including standard C library code linked into your binary — <code>glibc</code> is not the kernel and holds no special privilege at all. A "kernel module" runs in kernel space; a "userspace daemon" like <code>systemd</code> or <code>sshd</code>, no matter how privileged its Unix user account, still runs entirely in ring 3.</p>
 </div>
 
-<h2>23.5 Interactive: pick a symptom, walk the tree</h2>
+<h2>1.2 The syscall: the only door between them</h2>
+
+<p>If user space can't touch hardware directly, and everything useful eventually requires hardware — reading a file, sending a packet, allocating more memory — there has to be exactly one sanctioned way to ask the kernel to do it on your behalf. That mechanism is the <strong>system call</strong>, and its entire design is built around one requirement: cross from ring 3 to ring 0 in a way the CPU itself controls, so untrusted code can never jump into arbitrary kernel code at an arbitrary point.</p>
+
+<p>On x86-64 Linux, that's the <code>syscall</code> instruction. It's not a function call — there's no shared address space to jump into, and the call/ret convention doesn't apply across a privilege boundary. Instead:</p>
+
+<pre><code>; user space, about to call write(1, buf, len)
+mov rax, 1        ; syscall number for write
+mov rdi, 1         ; fd = stdout
+mov rsi, buf       ; pointer to the data
+mov rdx, len       ; byte count
+syscall            ; trap into the kernel
+; execution resumes here after the kernel returns
+; rax now holds the return value (bytes written, or -errno)</code></pre>
+
+<p>The <code>syscall</code> instruction does one very specific thing: it atomically switches the CPU to ring 0 and jumps to a single, fixed entry point the kernel registered at boot — never to an address user space supplies. That entry point reads <code>rax</code> to find out which of Linux's few hundred syscalls was requested, dispatches to the matching kernel function using the rest of the registers as arguments, and eventually executes <code>sysret</code> to drop back to ring 3 with a result in <code>rax</code>. User space never chooses where in the kernel execution begins — that's the entire security property this mechanism exists to provide.</p>
+
+<div class="callout rfc">
+  <span class="tag">A brief history, because it explains the API you actually use</span>
+  <p>Older x86 Linux used <code>int 0x80</code>, a software interrupt, to trigger the same transition — a general-purpose mechanism repurposed for syscalls, and noticeably slower because the CPU has to consult an interrupt descriptor table on every call. <code>syscall</code>/<code>sysenter</code> are dedicated fast paths added specifically for this transition, and every 64-bit Linux program uses <code>syscall</code> today. <code>int 0x80</code> still works, for 32-bit compatibility, but nothing modern chooses it on purpose.</p>
+</div>
+
+<h2>1.3 Watch one call cross the boundary</h2>
+
+<p>You never write raw <code>syscall</code> assembly by hand — <code>glibc</code> wraps every syscall in an ordinary-looking C function, so <code>write(fd, buf, len)</code> in your program is a normal call until the last few instructions inside that wrapper. Step through what actually happens between your code calling <code>write()</code> and it returning, for one four-byte write to a terminal.</p>
 
 <div class="demo">
-  <div class="demohead"><span>Interactive · symptom &rarr; diagnostic path</span><span id="dgstat"></span></div>
+  <div class="demohead"><span>Interactive &middot; one write() call, traced</span><span id="scstat">stage 1 / 7</span></div>
   <div class="demobody">
     <div class="ctl">
-      <select id="dgsymptom">
-        <option value="pending">Pod stuck Pending</option>
-        <option value="imagepull">ImagePullBackOff</option>
-        <option value="crashloop">CrashLoopBackOff</option>
-        <option value="oom">OOMKilled</option>
-        <option value="dns">Intermittent DNS failures / timeouts</option>
-      </select>
-      <button class="chip" id="dggo">Show diagnostic path</button>
+      <button class="chip" id="scprev">&larr; Previous</button>
+      <button class="chip" id="scnext">Next &rarr;</button>
+      <button class="chip" id="scfirst">Restart</button>
     </div>
-    <div class="out" id="dgout" style="max-height:260px;overflow-y:auto"></div>
+    <div class="out" id="scout" style="min-height:130px"></div>
   </div>
+  <div class="demonote">Every one of the few hundred Linux syscalls follows this identical shape — the only things that change per call are the number in <code>rax</code>, the arguments, and which kernel function ends up handling stage 5.</div>
 </div>
 
 <script>
 (function(){
-  var TREES = {
-    pending: {
-      cmd: 'kubectl describe pod &lt;name&gt; | grep -A10 Events',
-      steps: [
-        'Read the FailedScheduling event text verbatim — it names the exact reason, per node.',
-        '"Insufficient cpu/memory" → check node capacity vs. this pod’s requests (Ch. 5, 18). Either the cluster is genuinely full, or requests are set far larger than needed.',
-        '"taint ... didn’t tolerate" → check node taints vs. this pod’s tolerations (Ch. 5). Often a control-plane or specialised-hardware node with nothing meant to run there.',
-        '"unbound immediate PersistentVolumeClaims" → check the PVC’s own status and StorageClass (Ch. 14) — this is a storage problem wearing a scheduling symptom.'
-      ]
-    },
-    imagepull: {
-      cmd: 'kubectl describe pod &lt;name&gt; | grep -A5 Events',
-      steps: [
-        'Read the exact pull error — it almost always names the problem directly.',
-        '"manifest unknown" / "not found" → the image tag or repository name is wrong. Check the manifest against what actually exists in the registry.',
-        '"unauthorized" / "pull access denied" → missing or incorrect imagePullSecrets on the pod or its ServiceAccount (Ch. 20).',
-        'A plain timeout with no clear HTTP error → network/DNS reachability from that specific node to the registry (Ch. 9, 11) — test from the node itself, not just your workstation.'
-      ]
-    },
-    crashloop: {
-      cmd: 'kubectl logs &lt;name&gt; --previous',
-      steps: [
-        'Read the crashed instance’s own last output — not the current, possibly-just-restarted container’s logs.',
-        'A stack trace, config error, or explicit non-zero exit → an application bug or misconfiguration. No Kubernetes setting fixes this; fix the app or its config/Secret inputs (Ch. 17).',
-        'Clean exit, or the app appears to have been healthy right up to termination → check for a liveness probe killing it (Ch. 6) — especially one pointed at an external dependency.',
-        'Exit code 137 specifically → this is not a crash at all, it’s OOMKilled. Go to that path instead.'
-      ]
-    },
-    oom: {
-      cmd: 'kubectl get pod &lt;name&gt; -o jsonpath=\'{.status.containerStatuses[0].lastState.terminated}\'',
-      steps: [
-        'Confirm reason: OOMKilled and exitCode: 137 — this is a memory-limit kill, not a crash (Ch. 18).',
-        'Check whether actual usage genuinely exceeds a reasonable working set, or the limit was simply set too low relative to real need.',
-        'A sudden OOMKill under load, previously fine → possible memory leak, or a limit sized for average rather than peak usage.',
-        'This is never fixed by adjusting a liveness probe — probes and OOM kills are unrelated mechanisms (Ch. 6 vs. Ch. 18) that happen to produce a similarly dead pod.'
-      ]
-    },
-    dns: {
-      cmd: 'kubectl exec &lt;name&gt; -- cat /etc/resolv.conf',
-      steps: [
-        'Confirm this isn’t simply the ndots cost from Ch. 11 — an external FQDN with few dots pays for several guaranteed-NXDOMAIN queries before resolving; check whether a trailing dot fixes the observed latency.',
-        'Confirm CoreDNS pods themselves are healthy and not resource-throttled (Ch. 18) — a struggling CoreDNS produces exactly this symptom cluster-wide.',
-        'Intermittent, not constant → check for CoreDNS pods being evicted or restarted around the same time as failures (Ch. 7) — correlate timestamps, don’t assume.',
-        'Only specific pods affected → check NetworkPolicy (Ch. 13) for an egress rule that’s inadvertently blocking DNS port 53 traffic.'
-      ]
-    }
-  };
-  document.getElementById('dggo').addEventListener('click', function(){
-    var key = document.getElementById('dgsymptom').value;
-    var tree = TREES[key];
-    var out = document.getElementById('dgout');
-    out.innerHTML = '<div style="margin-bottom:10px"><strong>Start here:</strong> <code>' + tree.cmd + '</code></div>' +
-      '<ol style="padding-left:1.2em;margin:0">' + tree.steps.map(function(s){ return '<li style="margin-bottom:8px">' + s + '</li>'; }).join('') + '</ol>';
-  });
-  document.getElementById('dggo').click();
+  var STAGES = [
+    {t:'1 &middot; Your code, in user space (ring 3)', mode:'user',
+     d:'<code>write(1, "ok\\n", 3);</code> is called. This is an ordinary function call into glibc — no privilege transition has happened yet, and nothing here is special beyond being a normal branch to another user-space address.'},
+    {t:'2 &middot; The glibc wrapper loads registers', mode:'user',
+     d:'glibc\\'s <code>write()</code> moves the syscall number (1) into <code>rax</code> and the three arguments into <code>rdi</code>, <code>rsi</code>, <code>rdx</code> &mdash; the fixed calling convention every Linux syscall uses. Still ring 3, still no kernel code has run.'},
+    {t:'3 &middot; The syscall instruction traps', mode:'trap',
+     d:'The wrapper executes <code>syscall</code>. The CPU atomically switches to ring 0 and jumps to the one fixed kernel entry point registered at boot &mdash; the address came from the CPU\\'s own MSR, never from user-space instructions. This instant is the entire security boundary of this whole chapter.'},
+    {t:'4 &middot; The kernel dispatches on rax', mode:'kernel',
+     d:'Now in kernel space. The entry handler reads <code>rax</code> = 1, looks it up in the fixed syscall table, and calls <code>sys_write()</code> &mdash; real kernel code, with full hardware access, running on your process\\'s behalf.'},
+    {t:'5 &middot; sys_write() does the actual work', mode:'kernel',
+     d:'The kernel validates the user-space buffer pointer is actually mapped and readable, copies the 3 bytes into a kernel buffer, and hands them to the terminal driver. This is the one stage of the whole trip that could not have happened from ring 3 &mdash; writing to a physical device.'},
+    {t:'6 &middot; sysret drops back to ring 3', mode:'trap',
+     d:'The kernel places the return value (3, bytes written) into <code>rax</code> and executes <code>sysret</code>, the inverse of <code>syscall</code>: instant switch back to ring 3, resuming exactly where the wrapper left off.'},
+    {t:'7 &middot; Back in user space', mode:'user',
+     d:'glibc\\'s wrapper checks whether <code>rax</code> is negative (an encoded error &mdash; Section 1.5) and, since it isn\\'t, returns 3 straight to your code. Total elapsed time: a few hundred CPU cycles, almost all of it stages 3 and 6 &mdash; the transitions themselves, not the work in between.'}
+  ];
+  var i = 0;
+  var out = document.getElementById('scout');
+  var stat = document.getElementById('scstat');
+  var COLORS = {user:'var(--client)', trap:'var(--warn)', kernel:'var(--server)'};
+  var LABELS = {user:'USER SPACE &middot; RING 3', trap:'PRIVILEGE TRANSITION', kernel:'KERNEL SPACE &middot; RING 0'};
+  function render(){
+    var s = STAGES[i];
+    out.innerHTML = '<div style="font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:' + COLORS[s.mode] + ';margin-bottom:8px">' + LABELS[s.mode] + '</div>' +
+      '<h3 style="margin:0 0 10px">' + s.t + '</h3>' +
+      '<p style="margin:0">' + s.d + '</p>';
+    stat.textContent = 'stage ' + (i+1) + ' / ' + STAGES.length;
+  }
+  document.getElementById('scnext').addEventListener('click', function(){ if (i < STAGES.length-1) { i++; render(); } });
+  document.getElementById('scprev').addEventListener('click', function(){ if (i > 0) { i--; render(); } });
+  document.getElementById('scfirst').addEventListener('click', function(){ i = 0; render(); });
+  render();
 })();
 </script>
 
-<h2>23.6 Lab · the commands this whole chapter reduces to</h2>
+<h2>1.4 A stable ABI, on purpose</h2>
+
+<p>The syscall table is a numbered array — <code>read</code> is 0, <code>write</code> is 1, <code>open</code> is 2, <code>close</code> is 3, and so on up through several hundred entries. Those numbers, once assigned, are never reassigned and never removed. This is a deliberate, famously enforced policy: Linus Torvalds' <a href="https://en.wikipedia.org/wiki/Linux_kernel#Stable_API" target="_blank" rel="noopener">"we do not break userspace"</a> rule. A binary compiled against the syscall table of 2005 still runs correctly on a kernel released this year, because the numbers and calling conventions those instructions rely on have not moved.</p>
+
+<table>
+<thead><tr><th>rax</th><th>Syscall</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>0</code></td><td><code>read</code></td><td>Copy bytes from a file descriptor into a user-space buffer</td></tr>
+<tr><td><code>1</code></td><td><code>write</code></td><td>Copy bytes from a user-space buffer to a file descriptor</td></tr>
+<tr><td><code>2</code></td><td><code>open</code></td><td>Resolve a path and return a new file descriptor for it</td></tr>
+<tr><td><code>9</code></td><td><code>mmap</code></td><td>Map pages into this process's address space (Chapter 4)</td></tr>
+<tr><td><code>12</code></td><td><code>brk</code></td><td>Move the end of the heap segment</td></tr>
+<tr><td><code>57</code></td><td><code>fork</code></td><td>Clone the calling process (Chapter 2)</td></tr>
+<tr><td><code>60</code></td><td><code>exit</code></td><td>Terminate the calling process</td></tr>
+</tbody>
+</table>
+
+<p>This is also exactly why glibc exists as a layer at all, rather than every program hand-rolling <code>syscall</code> instructions. The numbers, argument order, and error-encoding convention are the kernel's actual stable contract; glibc's job is to present them as ordinary, portable-looking C functions, and occasionally to paper over a difference between architectures — the syscall numbers above are x86-64-specific and differ entirely on ARM64 or RISC-V, which is invisible to code that only ever calls <code>write()</code>.</p>
+
+<div class="callout warn">
+  <span class="tag">The escape hatch that doesn't use syscall at all</span>
+  <p>A handful of syscalls are called so often, and do so little real kernel work, that even the cost of a full ring transition is wasteful — <code>gettimeofday</code> and <code>clock_gettime</code> are the classic examples. For these, the kernel maps a small page of memory, the <strong>vDSO</strong> (virtual dynamic shared object), directly into every process's address space, containing a user-space-executable implementation that reads the same clock data the kernel would, with zero mode switch at all. Run <code>ldd</code> on any dynamically linked binary and <code>linux-vdso.so.1</code> is already there, loaded by the kernel itself before your program's own loader runs.</p>
+</div>
+
+<h2>1.5 How a syscall reports failure</h2>
+
+<p>A syscall can't throw an exception or return a null pointer the way a language runtime might — it communicates entirely through <code>rax</code>, a single integer register, on the way back across the boundary. The convention: a non-negative value is success (often the actual result, like a byte count or a new file descriptor), and a negative value is an error, encoded as <code>-errno</code>. <code>open()</code> on a file that doesn't exist returns <code>-2</code>, because <code>ENOENT</code> is errno 2.</p>
+
+<pre><code>// what the kernel actually returns in rax, roughly:
+long sys_open(...) {
+    ...
+    if (path_does_not_exist)
+        return -ENOENT;      // -2, still just an integer in rax
+    return new_fd;           // e.g. 3, a small positive integer
+}</code></pre>
+
+<p>The glibc wrapper is the layer that turns this back into the C convention you actually see: it checks whether <code>rax</code> is negative, and if so, sets the thread-local <code>errno</code> variable to the positive magnitude and makes the wrapper function itself return <code>-1</code> — not <code>-2</code>. This is why checking <code>errno</code> only means anything <em>immediately</em> after a call that actually failed; any later successful libc call is free to overwrite it, kernel included, for a syscall you didn't even make on purpose.</p>
+
+<h2>1.6 The transition isn't free</h2>
+
+<p>Every crossing of this boundary costs real time, and not only from the instructions themselves. A mode switch is a natural point for the CPU to lose pipeline state, and on kernels hardened against speculative-execution attacks (Meltdown-class issues), the page tables themselves may be partially swapped — <strong>KPTI</strong>, kernel page-table isolation — adding a measurable tax to every single syscall specifically to keep kernel memory from being readable through a speculative side channel from ring 3.</p>
+
+<p>This is precisely why syscall <em>count</em>, not just the work each syscall does, is a real performance concern. A program issuing one million tiny one-byte <code>write()</code> calls pays the full transition cost a million times over, versus buffering and issuing far fewer, larger writes. It's also the direct motivation for <code>io_uring</code> (Chapter 8) — a mechanism that lets a program submit a batch of I/O requests and collect their results with as few as zero syscalls per operation, by sharing a ring buffer with the kernel instead of trapping in for each one individually.</p>
+
+<h2>1.7 Lab &middot; watch the boundary get crossed</h2>
+
+<p><code>strace</code> works by asking the kernel to notify it on every syscall entry and exit for a traced process — it is, itself, a tool built entirely out of watching this boundary from the outside.</p>
 
 <div class="lab">
-  <div class="labhead"><span>Shell · the actual triage sequence, every time</span><button data-copy>Copy</button></div>
-<pre><code># Phase and conditions first - narrows which section of this chapter applies
-kubectl get pod &lt;name&gt; -o wide
-kubectl get pod &lt;name&gt; -o jsonpath='{.status.phase} {.status.conditions}'
+  <div class="labhead"><span>Shell &middot; tracing real syscalls</span><button data-copy>Copy</button></div>
+<pre><code># Every syscall a trivial command makes, in order
+strace -f echo ok
 
-# Events, always - this is the single highest-value command in this chapter
-kubectl describe pod &lt;name&gt; | grep -A15 Events
+# A representative line:
+# write(1, "ok\n", 3)                    = 3
+#   ^fd  ^buffer      ^len      ^return value (bytes written, in rax)
 
-# The crashed instance's own logs, not the current one's
-kubectl logs &lt;name&gt; --previous
-kubectl logs &lt;name&gt; --previous --all-containers
+# Force a failure and watch errno appear
+strace cat /no/such/file 2>&1 | grep open
+# openat(AT_FDCWD, "/no/such/file", O_RDONLY) = -1 ENOENT (No such file or directory)
+#                                                ^-1, the glibc-side value  ^decoded errno
 
-# The exact termination reason and exit code, unambiguous
-kubectl get pod &lt;name&gt; -o jsonpath='{.status.containerStatuses[*].lastState.terminated}'
+# Count syscalls by name and see where time actually goes
+strace -c ls / 2>&1 | tail -15
 
-# Cluster-wide events, sorted, when a symptom hits many pods at once -
-# a shared cause is usually visible here before it is in any one pod
-kubectl get events --sort-by=.lastTimestamp -A | tail -40
+# Confirm the vDSO is mapped into a running process with zero syscall cost
+cat /proc/self/maps | grep vdso
 
-# When nothing above explains it, an ephemeral debug container gets you
-# a shell in the exact failing pod's network/PID namespace without
-# changing the pod's image or restarting it
-kubectl debug -it &lt;name&gt; --image=busybox --target=&lt;container&gt;</code></pre>
+# Watch time-related calls specifically avoid a trap into the kernel at all
+strace -e trace=clock_gettime date +%s
+# often prints nothing under clock_gettime — many implementations resolve it
+# entirely inside the vDSO, invisible to a syscall tracer by design</code></pre>
 </div>
 
 <div class="quiz">
   <h3>Knowledge check</h3>
 
   <div class="q" data-answer="1">
-    <p class="qtext">A pod shows CrashLoopBackOff. kubectl logs (without --previous) shows nothing useful. What should you do before concluding there's no log data at all?</p>
+    <p class="qtext">Why can't a bug in a user-space program directly corrupt kernel memory?</p>
     <div class="opts">
-      <button class="opt">Increase the liveness probe timeout and see if it stops crashing</button>
-      <button class="opt">Run kubectl logs --previous — the current container may already be a fresh restart with nothing logged yet; the crashed instance's own output is a separate log stream</button>
-      <button class="opt">Delete and recreate the pod</button>
-      <button class="opt">Assume the image itself is corrupted</button>
+      <button class="opt">The kernel keeps a checksum of its own memory and detects corruption after the fact</button>
+      <button class="opt">The CPU itself refuses to execute privileged instructions or access kernel-mapped memory from ring 3 &mdash; it's enforced in hardware on every instruction, not by a software policy the kernel could get wrong</button>
+      <button class="opt">glibc validates every memory access before it reaches the kernel</button>
+      <button class="opt">Kernel memory is stored on a separate physical device</button>
     </div>
-    <p class="why">By the time you look at a crash-looping pod, it's often already restarted — plain kubectl logs shows the new, possibly quiet instance. --previous specifically retrieves the crashed container's own final output, which is usually where the actual explanation lives.</p>
-  </div>
-
-  <div class="q" data-answer="3">
-    <p class="qtext">A pod's last termination shows reason: OOMKilled, exitCode: 137. Someone suggests loosening its liveness probe's timeout to fix it. Why won't that help?</p>
-    <div class="opts">
-      <button class="opt">Liveness probes and memory limits use the same underlying timeout, so the suggestion is directionally correct but needs a bigger number</button>
-      <button class="opt">OOMKilled pods are always restarted immediately regardless of probe settings</button>
-      <button class="opt">exitCode 137 is caused by a failed readiness probe, not liveness</button>
-      <button class="opt">OOMKilled is the kernel killing the process for exceeding its memory limit — an entirely separate mechanism (Ch. 18) from probes (Ch. 6); no probe setting has any effect on when or whether the kernel enforces a memory cgroup limit</button>
-    </div>
-    <p class="why">This is exactly the kind of category error 23.4's callout warns about, applied to a different pair of mechanisms: OOMKilled is cgroup memory enforcement, unrelated to liveness/readiness probing entirely. The actual fix is addressing real memory usage against the limit, or raising the limit if the usage is legitimate.</p>
-  </div>
-
-  <div class="q" data-answer="0">
-    <p class="qtext">Several unrelated pods across a namespace start failing DNS lookups intermittently, all around the same few-minute window. What should you check first?</p>
-    <div class="opts">
-      <button class="opt">Whether the CoreDNS pods themselves were unhealthy, throttled, or restarting during that exact window — a shared, cluster-level cause producing a symptom that looks like it's "each pod's own problem"</button>
-      <button class="opt">Each affected pod's own resolv.conf individually, assuming independent misconfiguration</button>
-      <button class="opt">Whether every affected pod's application code has a DNS-related bug</button>
-      <button class="opt">Whether the affected pods share a common NetworkPolicy, before checking anything about DNS itself</button>
-    </div>
-    <p class="why">Multiple unrelated pods failing the same way at the same time is a strong signal of a shared, lower-level cause rather than several coincidental individual problems. CoreDNS health and resource pressure (tying back to Ch. 7 and Ch. 18) is exactly the kind of cluster-wide cause that produces symptoms scattered across many seemingly-unrelated pods.</p>
+    <p class="why">This is the entire point of the ring architecture: the protection is enforced by the CPU's privilege-checking hardware itself, on every single instruction, independent of and prior to any kernel logic. Nothing in user space, however buggy, has a code path that reaches privileged execution without going through the one sanctioned transition.</p>
   </div>
 
   <div class="q" data-answer="2">
-    <p class="qtext">A pod is Pending with the event "0/5 nodes are available: 5 node(s) had taint {dedicated: gpu}, that the pod didn't tolerate." What is actually wrong?</p>
+    <p class="qtext">What does user-space code actually control about where kernel execution begins after a <code>syscall</code> instruction?</p>
     <div class="opts">
-      <button class="opt">The pod's resource requests exceed cluster capacity</button>
-      <button class="opt">The container image cannot be pulled on any node</button>
-      <button class="opt">Every available node is tainted for GPU workloads, and this pod has no matching toleration — a Chapter 5 filter failure, unrelated to resource capacity or image availability</button>
-      <button class="opt">A required PersistentVolumeClaim has not bound</button>
+      <button class="opt">It can jump to any exported kernel symbol it chooses</button>
+      <button class="opt">It supplies a return address the kernel jumps to first</button>
+      <button class="opt">Nothing &mdash; execution always begins at one fixed entry point the kernel registered at boot; user space only selects which syscall runs, via the number in rax</button>
+      <button class="opt">It controls which kernel module handles the call</button>
     </div>
-    <p class="why">The event text names the exact filter that failed — taint/toleration mismatch — directly, with no need to guess between the several other reasons a pod can be Pending. Reading the event precisely, rather than assuming "Pending always means resource pressure," is the entire skill this section is teaching.</p>
+    <p class="why">This is precisely the security property the mechanism exists to guarantee. If user space could pick an arbitrary kernel entry address, the privilege boundary would be meaningless — any bug or malicious code could jump straight into the middle of kernel logic. The single fixed entry point is what makes "ask the kernel" categorically different from "run arbitrary code as the kernel."</p>
+  </div>
+
+  <div class="q" data-answer="0">
+    <p class="qtext">A syscall returns <code>-13</code> in <code>rax</code>. What does the glibc wrapper do with that before your C code sees a result?</p>
+    <div class="opts">
+      <button class="opt">Sets errno to 13 (EACCES) and makes the wrapper function itself return -1</button>
+      <button class="opt">Passes -13 straight through as the function's return value</button>
+      <button class="opt">Throws a C++ exception</button>
+      <button class="opt">Retries the syscall automatically up to three times</button>
+    </div>
+    <p class="why">The kernel's own convention is "negative return value = -errno," but the C-level convention your code actually relies on is "-1, plus check errno." Translating between those two conventions is exactly what the glibc wrapper does on every syscall's return path — it's not a kernel behavior at all.</p>
+  </div>
+
+  <div class="q" data-answer="3">
+    <p class="qtext">Why does the vDSO let <code>clock_gettime</code> avoid a full syscall entirely, when almost nothing else can?</p>
+    <div class="opts">
+      <button class="opt">Because time is not considered privileged information</button>
+      <button class="opt">Because clock_gettime is handled by a separate, faster CPU ring</button>
+      <button class="opt">Because glibc caches the last time value and never calls the kernel at all</button>
+      <button class="opt">Because the kernel maps a page of read-only clock data directly into every process's own address space, so a user-space routine can compute the answer itself with no privileged hardware access required at all</button>
+    </div>
+    <p class="why">The vDSO isn't a faster syscall path &mdash; it's a way to avoid the transition altogether for the narrow set of operations that don't actually need privileged execution, only privileged <em>data</em> the kernel is willing to expose read-only. Most syscalls, like write() actually touching a device, have no equivalent shortcut because the work genuinely requires ring 0.</p>
   </div>
 </div>
 
-<h2>23.7 What to carry into Chapter 24</h2>
+<h2>1.8 What to carry into Chapter 2</h2>
 <ul>
-<li>A symptom names a phase Kubernetes observed, not a root cause — Pending, ImagePullBackOff, CrashLoopBackOff and OOMKilled each map to genuinely different parts of the system.</li>
-<li><code>kubectl describe</code>'s events and <code>kubectl logs --previous</code> answer more real incidents than any other two commands in this course.</li>
-<li>Probe misconfiguration (Ch. 6) and OOM kills (Ch. 18) produce similarly dead pods through completely unrelated mechanisms — treating them interchangeably wastes real debugging time.</li>
-<li>A symptom appearing across many unrelated pods at once points at a shared, lower-level cause, not independent coincidences.</li>
+<li>User space (ring 3) and kernel space (ring 0) are enforced by the CPU on every instruction, not by kernel policy — a user-space bug cannot reach privileged execution by construction.</li>
+<li>A syscall is not a function call across that boundary; it's a hardware-mediated trap to one fixed kernel entry point, with the syscall number and arguments passed in registers.</li>
+<li>The syscall table's numbers and calling convention are Linux's actual stable ABI — glibc is a convenience wrapper around that contract, not the contract itself.</li>
+<li>Errors cross the boundary as a negative <code>-errno</code> in a single integer register; glibc translates that into the <code>-1</code> + <code>errno</code> convention C code actually checks.</li>
+<li>The vDSO is the one deliberate exception — mapping read-only kernel data into user space so a handful of hot calls need no transition at all.</li>
 </ul>
 
-<p>This course has moved through the system in pieces — one control loop, one component, one failure mode at a time. The capstone puts it back together: one <code>kubectl apply</code>, traced through every layer this course covered, in the order it actually happens.</p>
+<p>Everything in this chapter happened to one thread of execution making one call. The next question is what a <em>process</em> actually is — the thing that owns that thread, its memory, its file descriptors, and the syscalls (<code>fork</code>, <code>exec</code>, <code>exit</code>) that create and destroy it.</p>
 
 <div class="donebar"></div>
 <nav class="chapfoot"></nav>
 </div>
+
 </main>
 </div>
 <script>
@@ -958,7 +983,7 @@ window.getCourse = function (id) {
 };
 
 </script>
-<script>window.COURSE_ID = "kubernetes"; window.DEPTH = 2;</script>
+<script>window.COURSE_ID = "linux"; window.DEPTH = 2;</script>
 <script>
 /* Shared behaviour for every page in the library.
    Pages declare where they are with:
